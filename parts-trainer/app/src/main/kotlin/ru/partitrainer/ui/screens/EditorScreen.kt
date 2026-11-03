@@ -59,7 +59,12 @@ fun EditorScreen(projectId: Long, onBack: () -> Unit, onDone: (Long) -> Unit) {
     val thumb by produceState<Bitmap?>(null, project?.sourcePath, project?.pageIndex, project?.rotation) {
         val p = project ?: return@produceState
         val path = p.sourcePath ?: return@produceState
-        PageRenderer(File(path), p.sourceType == "PDF").use { r -> value = runCatching { r.thumbnail(p.pageIndex, 1100, p.rotation) }.getOrNull() }
+        val renderer = PageRenderer(File(path), p.sourceType == "PDF")
+        try {
+            value = runCatching { renderer.thumbnail(p.pageIndex, 1100, p.rotation) }.getOrNull()
+        } finally {
+            renderer.close()
+        }
     }
 
     Scaffold(
