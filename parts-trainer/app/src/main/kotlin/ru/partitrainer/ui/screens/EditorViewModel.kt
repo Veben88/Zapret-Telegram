@@ -49,6 +49,7 @@ class EditorViewModel(private val c: AppContainer, private val projectId: Long) 
             val st = EditState(p.score.voices, p.marks, p.uncertain)
             history = EditHistory(st)
             val idx = p.score.voices.indexOfFirst { it.id == p.selectedVoiceId }.coerceAtLeast(0)
+            ru.partitrainer.ui.components.SpellingState.flats = p.score.keyFifths < 0
             editor = NoteEditor.forMarks(p.marks, p.score.beatsPerMeasure)
             _ui.value = EditUi(project = p, state = st, voiceIndex = idx).relayout()
         }

@@ -6,6 +6,8 @@ object NoteNames {
     private val latinSharp = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
     private val solfegeSharp = arrayOf("до", "до♯", "ре", "ре♯", "ми", "фа", "фа♯", "соль", "соль♯", "ля", "ля♯", "си")
     private val letterPc = mapOf('C' to 0, 'D' to 2, 'E' to 4, 'F' to 5, 'G' to 7, 'A' to 9, 'B' to 11)
+    private val latinFlat = arrayOf("C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B")
+    private val solfegeFlat = arrayOf("до", "ре♭", "ре", "ми♭", "ми", "фа", "соль♭", "соль", "ля♭", "ля", "си♭", "си")
     private val solfegePc = mapOf("до" to 0, "ре" to 2, "ми" to 4, "фа" to 5, "соль" to 7, "ля" to 9, "си" to 11)
 
     /** Октава в научной нотации: C4 = 60. */
@@ -16,12 +18,13 @@ object NoteNames {
     fun isBlack(midi: Int): Boolean = pitchClass(midi) in intArrayOf(1, 3, 6, 8, 10)
 
     /** Название без октавы. */
-    fun name(midi: Int, notation: Notation): String {
+    fun name(midi: Int, notation: Notation, flats: Boolean = false): String {
         val pc = pitchClass(midi)
-        return if (notation == Notation.SOLFEGE) solfegeSharp[pc] else latinSharp[pc]
+        return if (notation == Notation.SOLFEGE) (if (flats) solfegeFlat else solfegeSharp)[pc] else (if (flats) latinFlat else latinSharp)[pc]
     }
 
-    fun nameWithOctave(midi: Int, notation: Notation): String = name(midi, notation) + octave(midi)
+    /** Октава у «до» и выше считается по звуку, поэтому для ♭-названий (до♭ и т. п.) крайние случаи не нужны: используются только чёрные клавиши. */
+    fun nameWithOctave(midi: Int, notation: Notation, flats: Boolean = false): String = name(midi, notation, flats) + octave(midi)
 
     /**
      * Разбор «F#4», «Bb4», «до#4», «Соль-бемоль 3». Возвращает null, если не удалось.

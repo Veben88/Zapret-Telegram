@@ -31,7 +31,9 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handle(intent)
         setContent {
             val settings by container.settings.flow.collectAsState(initial = Settings())
-            PartiTheme(settings.theme) { PartiNavHost(vm) }
+            PartiTheme(settings.theme) {
+                androidx.compose.runtime.CompositionLocalProvider(ru.partitrainer.ui.components.LocalNotation provides settings.notation) { PartiNavHost(vm) }
+            }
         }
     }
 

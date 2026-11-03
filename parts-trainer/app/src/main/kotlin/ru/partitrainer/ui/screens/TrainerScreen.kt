@@ -39,6 +39,7 @@ import ru.partitrainer.core.music.Phrase
 import ru.partitrainer.core.music.Ranges
 import ru.partitrainer.ui.appViewModel
 import ru.partitrainer.ui.components.LocalNotation
+import ru.partitrainer.ui.components.SpellingState
 import ru.partitrainer.ui.components.NoteChip
 import ru.partitrainer.ui.components.PianoKeyboard
 import ru.partitrainer.ui.components.RestChip
@@ -143,7 +144,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
                     for (nr in r.results) {
                         val label = stringResource(when (nr.outcome) { NoteOutcome.HIT -> R.string.out_hit; NoteOutcome.HIGH -> R.string.out_high; NoteOutcome.LOW -> R.string.out_low; NoteOutcome.MISSED -> R.string.out_missed })
                         val cents = nr.avgCents?.let { " (${if (it >= 0) "+" else ""}${it.roundToInt()} ¢)" } ?: ""
-                        Text("${NoteNames.nameWithOctave(nr.note.midi, notation)} · ${BeatsFormat.format(nr.note.beats)} — $label$cents",
+                        Text("${NoteNames.nameWithOctave(nr.note.midi, notation, SpellingState.flats)} · ${BeatsFormat.format(nr.note.beats)} — $label$cents",
                             Modifier.padding(vertical = 4.dp), color = if (nr.outcome == NoteOutcome.HIT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                     }
                 }
@@ -191,12 +192,12 @@ private fun Controls(vm: TrainerViewModel, ui: TrainerUi, d: Derived, onMic: () 
             val kind = d.voice?.kind
             val std = kind?.let { Ranges.of(it) }
             d.range?.let { r ->
-                val rangeText = "${NoteNames.nameWithOctave(r.low, notation)} – ${NoteNames.nameWithOctave(r.high, notation)}"
+                val rangeText = "${NoteNames.nameWithOctave(r.low, notation, SpellingState.flats)} – ${NoteNames.nameWithOctave(r.high, notation, SpellingState.flats)}"
                 Text(stringResource(R.string.range_of_voice, rangeText), style = MaterialTheme.typography.bodyMedium)
                 if (std != null) {
                     val out = d.voice!!.notes.count { it.midi !in std }
                     Text(
-                        stringResource(R.string.standard_range, NoteNames.nameWithOctave(std.low, notation), NoteNames.nameWithOctave(std.high, notation)) +
+                        stringResource(R.string.standard_range, NoteNames.nameWithOctave(std.low, notation, SpellingState.flats), NoteNames.nameWithOctave(std.high, notation, SpellingState.flats)) +
                             if (out > 0) " · " + stringResource(R.string.notes_out_of_range, out) else "",
                         style = MaterialTheme.typography.bodySmall, color = if (out > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -275,14 +276,14 @@ private fun MicPanel(ui: TrainerUi, vm: TrainerViewModel) {
         val h = ui.heard
         val text = if (h == null) stringResource(R.string.listening)
         else {
-            val name = NoteNames.nameWithOctave(h.nearestMidi, notation)
+            val name = NoteNames.nameWithOctave(h.nearestMidi, notation, SpellingState.flats)
             val c = h.cents.roundToInt()
             val sign = if (c > 0) "+" else ""
             val verdict = when (h.verdict) {
                 Verdict.IN_TUNE -> stringResource(R.string.verdict_ok); Verdict.HIGH -> stringResource(R.string.verdict_high)
                 Verdict.LOW -> stringResource(R.string.verdict_low); null -> ""
             }
-            val target = h.targetMidi?.let { " → ${NoteNames.nameWithOctave(it, notation)}" } ?: ""
+            val target = h.targetMidi?.let { " → ${NoteNames.nameWithOctave(it, notation, SpellingState.flats)}" } ?: ""
             stringResource(R.string.heard_fmt, name, "$sign$c", target) + if (verdict.isNotEmpty()) " · $verdict" else ""
         }
         val color = when (h?.verdict) { Verdict.IN_TUNE -> MaterialTheme.colorScheme.primary; null -> MaterialTheme.colorScheme.onSurface; else -> MaterialTheme.colorScheme.tertiary }

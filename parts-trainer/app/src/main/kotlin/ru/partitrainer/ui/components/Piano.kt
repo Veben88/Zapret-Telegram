@@ -55,7 +55,7 @@ fun PianoKeyboard(
     val pressedColor = MaterialTheme.colorScheme.primaryContainer
     val marker = MaterialTheme.colorScheme.tertiary
     val blackColor = Color(0xFF1B1B1F)
-    val desc = stringResource(R.string.keyboard_desc, NoteNames.nameWithOctave(lo, notation), NoteNames.nameWithOctave(hi, notation))
+    val desc = stringResource(R.string.keyboard_desc, NoteNames.nameWithOctave(lo, notation, SpellingState.flats), NoteNames.nameWithOctave(hi, notation, SpellingState.flats))
 
     LaunchedEffect(lo, targets.minOrNull()) {
         val t = targets.minOrNull() ?: return@LaunchedEffect
@@ -89,7 +89,7 @@ fun PianoKeyboard(
             val x = i * wPx
             drawRect(if (m in pressed) pressedColor else white, Offset(x, 0f), Size(wPx, hPx))
             drawRect(outline, Offset(x, 0f), Size(wPx, hPx), style = androidx.compose.ui.graphics.drawscope.Stroke(1f))
-            val label = NoteNames.name(m, notation)
+            val label = NoteNames.name(m, notation, SpellingState.flats)
             val tl = measurer.measure(label, TextStyle(fontSize = 11.sp, color = onSurface))
             drawText(tl, topLeft = Offset(x + (wPx - tl.size.width) / 2, hPx - tl.size.height - 6f))
             if (NoteNames.pitchClass(m) == 0) {

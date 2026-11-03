@@ -91,6 +91,7 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
             val s = c.settings.flow.first()
             _ui.value = TrainerUi(project = p, settings = s, voiceId = p.selectedVoiceId ?: p.score.voices.firstOrNull()?.id,
                 tempo = p.score.tempo ?: 85, expand = p.expandRepeats, measuresPerPhrase = s.measuresPerPhrase)
+            ru.partitrainer.ui.components.SpellingState.flats = p.score.keyFifths < 0
             recompute()
             c.settings.flow.collect { ns -> _ui.value = _ui.value.copy(settings = ns); c.synth.masterVolume = ns.volume; recompute() }
         }

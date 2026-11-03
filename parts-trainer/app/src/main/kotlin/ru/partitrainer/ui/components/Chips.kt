@@ -33,7 +33,7 @@ val LocalNotation = compositionLocalOf { Notation.SOLFEGE }
 /** Чип ноты: название, октава, длительность в долях, слог; «держать» для длинных; подсветка вне диапазона. */
 @Composable
 fun NoteChip(note: Note, notation: Notation, outOfRange: Boolean, active: Boolean, selected: Boolean, onClick: () -> Unit, displayMidi: Int = note.midi) {
-    val name = NoteNames.name(displayMidi, notation)
+    val name = NoteNames.name(displayMidi, notation, SpellingState.flats)
     val octave = NoteNames.octave(displayMidi)
     val beats = BeatsFormat.format(note.beats)
     val hold = note.beats > BeatsFormat.HOLD_THRESHOLD

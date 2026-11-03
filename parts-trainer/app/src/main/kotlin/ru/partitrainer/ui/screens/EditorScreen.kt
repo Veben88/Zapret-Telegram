@@ -42,6 +42,7 @@ import ru.partitrainer.omr.PageRenderer
 import ru.partitrainer.ui.appViewModel
 import ru.partitrainer.ui.components.NoteChip
 import ru.partitrainer.ui.components.RestChip
+import ru.partitrainer.ui.components.SpellingState
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -213,11 +214,11 @@ private fun NotePanel(vm: EditorViewModel, ui: EditUi) {
             Button(onClick = { vm.insertAtRest() }, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.make_note)) }
             return
         }
-        var name by remember(ni, note.midi) { mutableStateOf(NoteNames.nameWithOctave(note.midi, Notation.LATIN)) }
+        var name by remember(ni, note.midi) { mutableStateOf(NoteNames.nameWithOctave(note.midi, Notation.LATIN, SpellingState.flats)) }
         var lyric by remember(ni, note.lyric) { mutableStateOf(note.lyric ?: "") }
         var bad by remember { mutableStateOf(false) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(NoteNames.nameWithOctave(note.midi, notation), style = MaterialTheme.typography.titleMedium, modifier = Modifier.widthIn(min = 64.dp))
+            Text(NoteNames.nameWithOctave(note.midi, notation, SpellingState.flats), style = MaterialTheme.typography.titleMedium, modifier = Modifier.widthIn(min = 64.dp))
             for ((label, d) in listOf("−2" to -2, "−1" to -1, "+1" to 1, "+2" to 2)) {
                 OutlinedButton(onClick = { vm.shiftPitch(d) }, Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp), contentPadding = PaddingValues(4.dp)) { Text(label) }
             }

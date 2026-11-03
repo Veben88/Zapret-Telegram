@@ -95,3 +95,12 @@ class MusicTest {
         assertEquals(listOf(0, 3, 10), byLines.map { it.from })
     }
 }
+
+class SpellingTest {
+    @Test fun flatsInFlatKeys() {
+        assertEquals("ля♭4", NoteNames.nameWithOctave(68, Notation.SOLFEGE, true))
+        assertEquals("Ab4", NoteNames.nameWithOctave(68, Notation.LATIN, true))
+        assertEquals("G#4", NoteNames.nameWithOctave(68, Notation.LATIN, false))
+        assertEquals("до4", NoteNames.nameWithOctave(60, Notation.SOLFEGE, true))
+    }
+}
