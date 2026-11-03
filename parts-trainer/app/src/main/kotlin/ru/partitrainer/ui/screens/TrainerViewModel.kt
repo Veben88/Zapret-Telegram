@@ -10,7 +10,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import ru.partitrainer.AppContainer
 import ru.partitrainer.audio.MicFrame
@@ -52,6 +57,8 @@ class Derived(
     /** Нотный стан выбранного голоса «как напечатано» и карта повторов для каретки. */
     val spec: ScoreSpec? = null,
     val playMap: PlayMap = PlayMap(emptyList(), null),
+    /** Начала тактов напечатанных нот (в долях). */
+    val measureStarts: List<Double> = emptyList(),
 )
 
 data class TrainerUi(
@@ -84,6 +91,25 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
     val derived: StateFlow<Derived> = _derived
     val position = c.playback.position
 
+    // Узкие потоки: экран подписывается только на то, что ему нужно, а не на каждый кадр позиции целиком
+    val beat: StateFlow<Double> = position.map { it.beat }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, 0.0)
+    val activeMain: StateFlow<Set<Int>> = position.map { it.activeMain }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+    val countIn: StateFlow<Int> = position.map { it.countInBeat }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    /** Фраза под указателем (−1, если не играет). Меняется редко. */
+    val curPhrase: StateFlow<Int> = combine(beat, _derived, _ui) { b, d, u ->
+        if ((u.playing || u.pausedByFocus) && d.phrases.isNotEmpty()) d.phrases.indexOfFirst { b < it.endBeat - 1e-9 }.let { if (it < 0) d.phrases.lastIndex else it } else -1
+    }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, -1)
+
+    /** Такт напечатанных нот под кареткой (−1, если не играет). */
+    val curMeasure: StateFlow<Int> = combine(beat, _derived, _ui) { b, d, u ->
+        if (!(u.playing || u.pausedByFocus)) -1
+        else {
+            val ob = d.playMap.originalBeat(b)
+            d.playMap.originalMeasure(b).takeIf { it >= 0 && d.playMap.expanded } ?: d.measureStarts.indexOfLast { it <= ob + 1e-9 }
+        }
+    }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, -1)
+
     private var micJob: Job? = null
     private var singJob: Job? = null
     private val singSamples = ArrayList<PitchSample>()
@@ -105,7 +131,7 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
             }
             _ui.value = _ui.value.copy(layout = lay)
             recompute()
-            c.settings.flow.collect { ns -> _ui.value = _ui.value.copy(settings = ns); c.synth.masterVolume = ns.volume; c.synth.sustain = ns.sustain; recompute() }
+            c.settings.flow.collect { ns -> _ui.value = _ui.value.copy(settings = ns); c.synth.masterVolume = ns.volume; c.synth.sustain = ns.sustain }
         }
         viewModelScope.launch { c.playback.state.collect { st -> _ui.value = _ui.value.copy(playing = st == PlayState.PLAYING, pausedByFocus = st == PlayState.PAUSED_BY_FOCUS) } }
     }
@@ -135,7 +161,8 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
             )
         }
         _derived.value = Derived(voice, voices.filter { it.id != voice?.id }, phrases, voice?.notes?.let { Ranges.actual(it) }, base, exp, hasStructure, bpm,
-            spec, PlayMap(marks, if (doExpand) exp.order else null))
+            spec, PlayMap(marks, if (doExpand) exp.order else null),
+            spec?.let { sp -> ru.partitrainer.core.edit.MeasureLayout.build(sp.notes, sp.marks, sp.beatsPerMeasure).map { it.start } }.orEmpty())
     }
 
     private fun persist() {

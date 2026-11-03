@@ -58,7 +58,12 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     val vm = appViewModel(key = "trainer$projectId") { TrainerViewModel(it, projectId) }
     val ui by vm.ui.collectAsState()
     val d by vm.derived.collectAsState()
-    val pos by vm.position.collectAsState()
+    // Подписки узкие: позиция по кадрам читается только в мелких местах (указатель, каретка, полоса фразы), не во всём экране
+    val activeMain by vm.activeMain.collectAsState()
+    val curPhrase by vm.curPhrase.collectAsState()
+    val curMeasure by vm.curMeasure.collectAsState()
+    val countIn by vm.countIn.collectAsState()
+    val beatState = vm.beat.collectAsState()
     val ctx = LocalContext.current
     val wide = LocalConfiguration.current.screenWidthDp >= 600
     val notation = ui.settings.notation
@@ -86,12 +91,10 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     val notes = voice?.notes.orEmpty()
     val totalBeats = notes.maxOfOrNull { it.endBeat } ?: 0.0
     val active = ui.playing || ui.pausedByFocus
-    // Текущая фраза под указателем (только пока играет): первая, чей конец ещё впереди
-    val curPhrase = if (active && d.phrases.isNotEmpty()) d.phrases.indexOfFirst { pos.beat < it.endBeat - 1e-9 }.let { if (it < 0) d.phrases.lastIndex else it } else -1
     val listState = rememberLazyListState()
     LaunchedEffect(curPhrase) { if (curPhrase >= 0) listState.animateScrollToItem(curPhrase + 1) }
     val targets: Set<Int> = buildSet {
-        pos.activeMain.forEach { notes.getOrNull(it)?.let { n -> add(n.midi) } }
+        activeMain.forEach { notes.getOrNull(it)?.let { n -> add(n.midi) } }
         ui.selectedNote?.let { notes.getOrNull(it)?.let { n -> add(n.midi) } }
         ui.singing?.let { s -> notes.getOrNull(s.activeIndex)?.let { n -> add(n.midi) } }
     }
@@ -99,17 +102,12 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     val kbHigh = (d.range?.high ?: 76) + 2
 
     val transport: @Composable () -> Unit = {
-        if (totalBeats > 0) PlayheadBar(pos.beat, pos.countInBeat, totalBeats, active, d, notes, curPhrase, { b -> vm.playFrom(b) }, vm::stop)
+        if (totalBeats > 0) PlayheadBar(beatState, countIn, totalBeats, active, d, notes, curPhrase, { b -> vm.playFrom(b) }, vm::stop)
     }
     val keyboard: @Composable () -> Unit = {
-        PianoKeyboard(kbLow, kbHigh, notation, targets, pos.activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::tapKey, Modifier.padding(vertical = 6.dp))
+        PianoKeyboard(kbLow, kbHigh, notation, targets, activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::tapKey, Modifier.padding(vertical = 6.dp))
     }
-    // Такты напечатанных нот: начала в долях и текущий такт под кареткой (для режима «Оригинал»)
-    val measureStarts = remember(d.spec) { d.spec?.let { sp -> MeasureLayout.build(sp.notes, sp.marks, sp.beatsPerMeasure).map { it.start } }.orEmpty() }
-    val curMeasure = if (!active) -1 else {
-        val ob = d.playMap.originalBeat(pos.beat)
-        d.playMap.originalMeasure(pos.beat).takeIf { it >= 0 && d.playMap.expanded } ?: measureStarts.indexOfLast { it <= ob + 1e-9 }
-    }
+    val measureStarts = d.measureStarts
     var originalMode by rememberSaveable { mutableStateOf(false) }
     val layout = ui.layout
     val project = ui.project
@@ -128,7 +126,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
             } else if (spec != null) {
-                ScoreView(spec, d.playMap, pos.beat, showCaret = active, onSeek = { ob -> vm.playFrom(d.playMap.expandedBeat(ob), false) }, modifier = Modifier.weight(1f).fillMaxWidth())
+                ScoreView(spec, { beatState.value }, curMeasure, d.playMap, showCaret = active, onSeek = { ob -> vm.playFrom(d.playMap.expandedBeat(ob), false) }, modifier = Modifier.weight(1f).fillMaxWidth())
             }
         }
     }
@@ -168,10 +166,10 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
                 LazyColumn(m, state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
                     item { controls() }
                     itemsIndexed(d.phrases) { i, ph ->
-                        PhraseCard(i, ph, notes.subList(ph.from, ph.to), ph.from, d.voice?.kind, notation, pos.activeMain,
+                        PhraseCard(i, ph, notes.subList(ph.from, ph.to), ph.from, d.voice?.kind, notation, activeMain,
                             singActive = ui.singing?.takeIf { it.phrase == i }?.activeIndex, selected = ui.selectedNote,
                             looping = ui.loopPhrase == i, playing = ui.playing,
-                            progress = if (i == curPhrase) ((pos.beat - ph.startBeat) / (ph.endBeat - ph.startBeat).coerceAtLeast(1e-6)).toFloat().coerceIn(0f, 1f) else null,
+                            progress = if (i == curPhrase) ({ ((beatState.value - ph.startBeat) / (ph.endBeat - ph.startBeat).coerceAtLeast(1e-6)).toFloat().coerceIn(0f, 1f) }) else null,
                             onNote = vm::tapNote,
                             onPlay = { vm.playPhrase(i, false) }, onLoop = { vm.playPhrase(i, true) }, onStop = vm::stop,
                             onSing = { withMic(i) }, bpmBeats = d.bpm)
@@ -338,12 +336,12 @@ private fun Controls(vm: TrainerViewModel, ui: TrainerUi, d: Derived, onMic: () 
  */
 @Composable
 private fun PlayheadBar(
-    beat: Double, countIn: Int, total: Double, active: Boolean, d: Derived, notes: List<Note>, curPhrase: Int,
+    beatState: State<Double>, countIn: Int, total: Double, active: Boolean, d: Derived, notes: List<Note>, curPhrase: Int,
     onSeek: (Double) -> Unit, onStop: () -> Unit,
 ) {
     var drag by remember { mutableStateOf<Float?>(null) }
     var lastSeek by remember { mutableStateOf(0f) }
-    val live = if (active) (beat / total).toFloat().coerceIn(0f, 1f) else lastSeek
+    val live = if (active) (beatState.value / total).toFloat().coerceIn(0f, 1f) else lastSeek
     val value = drag ?: live
     val shownBeat = (value * total)
     // Такт под указателем: ближайшая слева нота (с учётом повторов её номер — из нотного текста)
@@ -393,7 +391,7 @@ private fun MicPanel(ui: TrainerUi, vm: TrainerViewModel) {
 @Composable
 private fun PhraseCard(
     index: Int, phrase: Phrase, notes: List<Note>, firstIndex: Int, kind: ru.partitrainer.core.model.VoiceKind?, notation: Notation,
-    activeMain: Set<Int>, singActive: Int?, selected: Int?, looping: Boolean, playing: Boolean, progress: Float?,
+    activeMain: Set<Int>, singActive: Int?, selected: Int?, looping: Boolean, playing: Boolean, progress: (() -> Float)?,
     onNote: (Int) -> Unit, onPlay: () -> Unit, onLoop: () -> Unit, onStop: () -> Unit, onSing: () -> Unit, bpmBeats: Double,
 ) {
     val m1 = notes.firstOrNull()?.measure ?: (Math.floor(phrase.startBeat / bpmBeats + 1e-9).toInt() + 1)
@@ -406,7 +404,7 @@ private fun PhraseCard(
                 FilledTonalIconToggleButton(checked = looping, onCheckedChange = { if (it) onLoop() else onStop() }) { Icon(Icons.Default.Repeat, stringResource(R.string.loop_phrase, index + 1)) }
                 IconButton(onClick = onSing) { Icon(Icons.Default.Mic, stringResource(R.string.sing_phrase, index + 1)) }
             }
-            if (progress != null) LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth().semantics { contentDescription = "phrase progress" })
+            if (progress != null) LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "phrase progress" })
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 notes.forEachIndexed { k, n ->
                     val gi = firstIndex + k

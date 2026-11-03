@@ -10,7 +10,6 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.sin
-import kotlin.math.tanh
 
 /**
  * Собственный синтезатор на AudioTrack (без сэмплов и внешних библиотек).
@@ -43,6 +42,14 @@ class Synth {
         val releaseSamples = (when (kind) { Kind.AAH -> 0.12f + 0.55f * sustain; Kind.PIANO -> 0.09f + 1.8f * sustain; Kind.CLICK -> 0.01f }) * sampleRate
         val tauLow = when (kind) { Kind.PIANO -> (2.4 - 0.025 * (key - 48)).coerceIn(0.5, 3.0) * (1.0 + 1.2 * sustain) * sampleRate; else -> 1e12 }
         val tauHigh = tauLow * 0.22
+        // огибающие спада считаем умножением (один exp на ноту, а не по два на каждый сэмпл)
+        val decLow = exp(-1.0 / tauLow).toFloat()
+        val decHigh = exp(-1.0 / tauHigh).toFloat()
+        val decClick = exp(-1.0 / (0.006 * sampleRate)).toFloat()
+        var envLow = 1f
+        var envHigh = 1f
+        var envClick = 1f
+        var vib = 1.0                 // множитель частоты вибрато, обновляется раз в блок
         var done = false
 
         fun release(fast: Boolean = false) {
@@ -149,7 +156,13 @@ class Synth {
         }
     }
 
-    private fun softClip(x: Float): Float = tanh(x.toDouble()).toFloat()
+    /** Быстрое приближение tanh (рациональная функция), хватает для мягкого ограничения громкости. */
+    private fun softClip(x: Float): Float {
+        if (x > 3f) return 1f
+        if (x < -3f) return -1f
+        val x2 = x * x
+        return x * (27f + x2) / (27f + 9f * x2)
+    }
 
     private fun render(v: Voice, out: FloatArray) {
         val n = out.size
@@ -165,13 +178,12 @@ class Synth {
             } else if (v.level < 1f) {
                 v.level = (v.level + v.attackStep).coerceAtMost(1f)
             }
-            var inc = v.inc
-            if (vibrato) {
+            if (vibrato && (i and 31) == 0) {
                 val sec = v.t.toDouble() / v.sampleRate
                 val depth = 0.004 * (sec - 0.25).coerceIn(0.0, 0.5) * 2 // вибрато нарастает после 250 мс
-                inc *= 1.0 + depth * sin(2 * PI * 5.5 * sec)
+                v.vib = 1.0 + depth * sin(2 * PI * 5.5 * sec)
             }
-            v.phase += inc
+            v.phase += if (vibrato) v.inc * v.vib else v.inc
             if (v.phase >= 1.0) v.phase -= 1.0
             val pos = v.phase * tableSize
             val i0 = pos.toInt()
@@ -182,10 +194,10 @@ class Synth {
                 Kind.PIANO -> {
                     val h = v.high!!
                     val hs = (h[i0] + (h[i1] - h[i0]) * frac) * 0.5f
-                    val tt = v.t.toDouble()
-                    s = s * exp(-tt / v.tauLow).toFloat() + hs * exp(-tt / v.tauHigh).toFloat()
+                    s = s * v.envLow + hs * v.envHigh
+                    v.envLow *= v.decLow; v.envHigh *= v.decHigh
                 }
-                Kind.CLICK -> s *= exp(-v.t.toDouble() / (0.006 * v.sampleRate)).toFloat()
+                Kind.CLICK -> { s *= v.envClick; v.envClick *= v.decClick }
                 Kind.AAH -> {}
             }
             out[i] += s * v.level * v.gain

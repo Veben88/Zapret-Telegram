@@ -2,7 +2,9 @@ package ru.partitrainer.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
@@ -59,7 +61,7 @@ private class Sys(val line: SystemPacker.Line, val top: Float, val height: Float
  */
 @Composable
 fun ScoreView(
-    spec: ScoreSpec, playMap: PlayMap, beat: Double, showCaret: Boolean, onSeek: (Double) -> Unit, modifier: Modifier = Modifier,
+    spec: ScoreSpec, beat: () -> Double, curMeasure: Int, playMap: PlayMap, showCaret: Boolean, onSeek: (Double) -> Unit, modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
     val tm = rememberTextMeasurer()
@@ -67,6 +69,7 @@ fun ScoreView(
     val accent = MaterialTheme.colorScheme.primary
     val hasClefGlyph = remember { android.graphics.Paint().hasGlyph("𝄞") && android.graphics.Paint().hasGlyph("𝄢") }
     val measures = remember(spec) { MeasureLayout.build(spec.notes, spec.marks, spec.beatsPerMeasure) }
+    val minWidths = remember(measures) { measures.map { m -> m.cells.size to m.length } }
     val scroll = rememberScrollState()
     val seek = androidx.compose.runtime.rememberUpdatedState(onSeek)
 
@@ -81,17 +84,11 @@ fun ScoreView(
         val sysH = above + 4 * s + below
         val gap = s * 2f
 
-        val minW = measures.map { m ->
-            val n = m.cells.size
-            max(m.length.toFloat() * s * 3.6f, n * s * 3.4f) + padL * 2
-        }
+        val minW = remember(minWidths, s) { minWidths.map { (n, len) -> max(len.toFloat() * s * 3.6f, n * s * 3.4f) + padL * 2 } }
         val lines = remember(measures, widthPx, headerW) { SystemPacker.pack(minW.map { it.toDouble() }, headerW.toDouble(), widthPx.toDouble()) }
         val systems = remember(lines, sysH) { lines.mapIndexed { i, l -> Sys(l, i * (sysH + gap), sysH) } }
         val totalH = systems.size * (sysH + gap)
 
-        // позиция каретки
-        val origBeat = playMap.originalBeat(beat)
-        val curMeasure = if (!showCaret) -1 else playMap.originalMeasure(beat).takeIf { it >= 0 && playMap.expanded } ?: measures.indexOfLast { it.start <= origBeat + 1e-9 }
         val curSystem = systems.indexOfFirst { curMeasure >= it.line.from && curMeasure < it.line.toExclusive }
 
         LaunchedEffect(curSystem, showCaret) {
@@ -105,8 +102,10 @@ fun ScoreView(
         }
 
         androidx.compose.foundation.layout.Column(Modifier.verticalScroll(scroll)) {
+            Box(Modifier.fillMaxWidth().height(with(density) { totalH.toDp() })) {
+            // Слой нот рисуется один раз на раскладку; кадры движения каретки его не перерисовывают
             Canvas(
-                Modifier.fillMaxWidth().height(with(density) { totalH.toDp() })
+                Modifier.fillMaxSize()
                     .pointerInput(systems, measures) {
                         detectTapGestures { p ->
                             val si = systems.indexOfFirst { p.y >= it.top && p.y < it.top + it.height + gap }.takeIf { it >= 0 } ?: return@detectTapGestures
@@ -127,8 +126,25 @@ fun ScoreView(
                     },
             ) {
                 for ((si, sys) in systems.withIndex()) {
-                    drawSystem(sys, si == 0, spec, measures, tm, ink, accent, hasClefGlyph, s, padL, headerW, above, curMeasure, origBeat, showCaret)
+                    drawSystem(sys, si == 0, spec, measures, tm, ink, accent, hasClefGlyph, s, padL, headerW, above)
                 }
+            }
+            // Слой каретки: читает позицию только при рисовании
+            Canvas(Modifier.fillMaxSize()) {
+                if (!showCaret || curMeasure < 0) return@Canvas
+                val si = systems.indexOfFirst { curMeasure >= it.line.from && curMeasure < it.line.toExclusive }
+                if (si < 0) return@Canvas
+                val sys = systems[si]
+                val m = measures[curMeasure]
+                val (mx, mw) = measureX(sys, curMeasure)
+                val staffTop = sys.top + above
+                val staffBottom = staffTop + 4 * s
+                drawRoundRect(accent.copy(alpha = 0.10f), Offset(mx + 1f, staffTop - s * 2.2f), Size(mw - 2f, 4 * s + s * 4.4f), CornerRadius(s * 0.6f))
+                val ob = playMap.originalBeat(beat())
+                val cx = mx + padL + ((ob - m.start) / m.length).toFloat().coerceIn(0f, 1f) * (mw - 2 * padL)
+                drawRoundRect(accent.copy(alpha = 0.16f), Offset(cx - s * 0.9f, staffTop - s * 1.6f), Size(s * 1.8f, 4 * s + s * 3.2f), CornerRadius(s * 0.9f))
+                drawLine(accent, Offset(cx, staffTop - s * 1.6f), Offset(cx, staffBottom + s * 1.6f), max(2f, s * 0.22f), StrokeCap.Round)
+            }
             }
         }
     }
@@ -137,7 +153,6 @@ fun ScoreView(
 private fun DrawScope.drawSystem(
     sys: Sys, first: Boolean, spec: ScoreSpec, measures: List<MeasureView>, tm: TextMeasurer,
     ink: Color, accent: Color, hasClefGlyph: Boolean, s: Float, padL: Float, headerW: Float, above: Float,
-    curMeasure: Int, origBeat: Double, showCaret: Boolean,
 ) {
     val staffTop = sys.top + above
     val staffBottom = staffTop + 4 * s
@@ -182,9 +197,6 @@ private fun DrawScope.drawSystem(
         val mark = spec.marks.getOrNull(mi)
         fun xAt(beat: Double) = mx + padL + ((beat - m.start) / m.length).toFloat().coerceIn(0f, 1f) * inner
 
-        if (mi == curMeasure) {
-            drawRoundRect(accent.copy(alpha = 0.10f), Offset(mx + thin, staffTop - s * 2.2f), Size(mw - 2 * thin, 4 * s + s * 4.4f), CornerRadius(s * 0.6f))
-        }
         // номер такта и вольта
         if (mi == sys.line.from) text("${m.number}", mx + s * 0.2f, staffTop - s * 2.9f, s * 1.5f, color = ink.copy(alpha = 0.6f))
         mark?.volta?.takeIf { it.isNotEmpty() }?.let { v ->
@@ -198,8 +210,8 @@ private fun DrawScope.drawSystem(
         class Head(val x: Float, val y: Float, val pos: Int, val dur: Dur, val active: Boolean, val note: Note)
         val heads = HashMap<Int, Head>()
         for (c in m.cells) {
-            val active = showCaret && mi == curMeasure && origBeat >= c.start - 1e-6 && origBeat < c.start + c.beats - 1e-6
-            val color = if (active) accent else ink
+            val active = false
+            val color = ink
             val x = xAt(c.start)
             when (c) {
                 is RestCell -> drawRest(c, m, x, xAt(c.start + c.beats), staffTop, s, color, thin)
@@ -263,13 +275,6 @@ private fun DrawScope.drawSystem(
                 }
                 drawPath(path, color, style = Stroke(thin * 1.4f, cap = StrokeCap.Round))
             }
-        }
-
-        // каретка внутри такта
-        if (mi == curMeasure && showCaret) {
-            val cx = xAt(origBeat)
-            drawRoundRect(accent.copy(alpha = 0.16f), Offset(cx - s * 0.9f, staffTop - s * 1.6f), Size(s * 1.8f, 4 * s + s * 3.2f), CornerRadius(s * 0.9f))
-            drawLine(accent, Offset(cx, staffTop - s * 1.6f), Offset(cx, staffBottom + s * 1.6f), max(2f, s * 0.22f), StrokeCap.Round)
         }
 
         // тактовые черты

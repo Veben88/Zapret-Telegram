@@ -132,21 +132,30 @@ class PlaybackEngine(context: Context, private val synth: Synth) {
                 val handles = HashMap<Int, Long>()      // ключ = индекс события
                 var next = 0
                 val active = HashMap<Int, Ev>()
+                var activeSet: Set<Int> = emptySet()   // подсвеченные ноты главного голоса; пересобирается только при изменении
+                var lastEmitNs = 0L
                 while (currentCoroutineContext().isActive) {
                     val nowBeat = r.fromBeat + (SystemClock.elapsedRealtimeNanos() - startNs) / 1e9 / secPerBeat
+                    var changed = false
                     while (next < evs.size && evs[next].start <= nowBeat) {
                         val e = evs[next]
                         val tr = r.tracks[e.track]
                         handles[next] = synth.noteOn(tr.notes[e.idx].midi, tr.gain, r.kind)
                         active[next] = e
-                        next++
+                        next++; changed = true
                     }
                     val iter = active.entries.iterator()
                     while (iter.hasNext()) {
                         val (k, e) = iter.next()
-                        if (e.end <= nowBeat) { handles.remove(k)?.let { h -> synth.noteOff(h) }; iter.remove() }
+                        if (e.end <= nowBeat) { handles.remove(k)?.let { h -> synth.noteOff(h) }; iter.remove(); changed = true }
                     }
-                    _position.value = PlayPosition(nowBeat, active.values.filter { r.tracks[it.track].main }.map { it.idx }.toSet())
+                    if (changed) activeSet = active.values.filter { r.tracks[it.track].main }.map { it.idx }.toSet()
+                    // Интерфейсу хватает ~40 кадров/с; звук при этом планируется каждые 4 мс
+                    val nowNs = SystemClock.elapsedRealtimeNanos()
+                    if (changed || nowNs - lastEmitNs >= 25_000_000L) {
+                        _position.value = PlayPosition(nowBeat, activeSet)
+                        lastEmitNs = nowNs
+                    }
                     if (nowBeat >= r.toBeat && active.isEmpty()) break
                     delay(4)
                 }
