@@ -56,8 +56,9 @@ fun EditorScreen(projectId: Long, onBack: () -> Unit, onDone: (Long) -> Unit) {
     var kindMenu by remember { mutableStateOf(false) }
     var bigThumb by remember { mutableStateOf(false) }
 
-    val thumb by produceState<Bitmap?>(null, project?.sourcePath, project?.pageIndex, project?.rotation) {
-        value = loadSourceThumb(project)
+    var thumb by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(project?.sourcePath, project?.pageIndex, project?.rotation) {
+        thumb = loadSourceThumb(project)
     }
 
     Scaffold(
