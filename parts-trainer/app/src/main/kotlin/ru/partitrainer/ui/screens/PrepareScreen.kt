@@ -119,6 +119,11 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
         return OmrJob.enqueue(c.context, job).toString()
     }
 
+    suspend fun manualEntry(): Long {
+        val page = selected.value.minOrNull() ?: 0
+        return c.importer.createManualFromSource(path, hash, name, isPdf, page, rotations.value[page] ?: 0)
+    }
+
     suspend fun acceptWarning() = c.settings.update { it.copy(claudeWarningAccepted = true) }
 
     override fun onCleared() {
@@ -129,7 +134,7 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBack: () -> Unit, onStarted: (String, String) -> Unit, onSettings: () -> Unit) {
+fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBack: () -> Unit, onStarted: (String, String) -> Unit, onManual: (Long) -> Unit, onSettings: () -> Unit) {
     val vm = appViewModel(key = hash) { PrepareViewModel(it, path, hash, name, isPdf) }
     val thumbs by vm.thumbs.collectAsState()
     val selected by vm.selected.collectAsState()
@@ -224,6 +229,11 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
                 onClick = { if (settings.engine == EngineId.CLAUDE_VISION && !settings.claudeWarningAccepted) warn = true else go() },
                 enabled = selected.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) { Text(stringResource(R.string.start_recognition)) }
+            OutlinedButton(
+                onClick = { scope.launch { onManual(vm.manualEntry()) } },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            ) { Text(stringResource(R.string.manual_from_page)) }
+            Text(stringResource(R.string.manual_from_page_hint), style = MaterialTheme.typography.bodySmall)
         }
     }
 

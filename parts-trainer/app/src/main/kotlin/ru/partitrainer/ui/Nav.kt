@@ -75,6 +75,7 @@ fun PartiNavHost(main: MainViewModel) {
                 path = a.getString("path")!!, hash = a.getString("hash")!!, name = a.getString("name")!!, isPdf = a.getBoolean("pdf"),
                 onBack = { nav.popBackStack() },
                 onStarted = { id, title -> nav.navigate(Routes.progress(id, title)) { popUpTo(Routes.HOME) } },
+                onManual = { id -> nav.navigate(Routes.review(id)) { popUpTo(Routes.HOME) } },
                 onSettings = { nav.navigate(Routes.SETTINGS) },
             )
         }
