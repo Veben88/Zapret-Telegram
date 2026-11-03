@@ -130,3 +130,54 @@ class EditorTest {
         assertFalse(h.canRedo)
     }
 }
+
+class LayoutTest {
+    @Test fun layoutWithRests() {
+        val notes = listOf(Note(60, 0.0, 1.0, 1), Note(62, 2.0, 1.0, 1), Note(64, 4.0, 4.0, 2))
+        val v = ru.partitrainer.core.edit.MeasureLayout.build(notes, emptyList(), 4.0)
+        assertEquals(2, v.size)
+        assertEquals(listOf("N", "R", "N", "R"), v[0].cells.map { if (it is ru.partitrainer.core.edit.NoteCell) "N" else "R" })
+        assertTrue(v[0].balanced)
+        assertTrue(v[1].balanced)
+        assertEquals(2, v[1].number)
+    }
+
+    @Test fun layoutMarksPickup() {
+        val marks = listOf(ru.partitrainer.core.structure.MeasureMark(0.0, 1.0), ru.partitrainer.core.structure.MeasureMark(1.0, 4.0))
+        val notes = listOf(Note(60, 0.0, 1.0, 1), Note(62, 1.0, 3.0, 2))
+        val v = ru.partitrainer.core.edit.MeasureLayout.build(notes, marks, 4.0)
+        assertTrue(v[0].balanced)
+        assertTrue(v[1].cells.last() is ru.partitrainer.core.edit.NoteCell) // последний такт без «хвоста» паузы
+    }
+
+    @Test fun beatsFormat() {
+        val f = ru.partitrainer.core.music.BeatsFormat::format
+        assertEquals("½", f(0.5)); assertEquals("1½", f(1.5)); assertEquals("2", f(2.0)); assertEquals("¼", f(0.25))
+        assertEquals("15", f(15.0)); assertEquals("0.2", f(0.2))
+    }
+}
+
+class StaffFinderTest {
+    private fun page(w: Int, h: Int, stavesTop: List<Int>, spacing: Int): IntArray {
+        val img = IntArray(w * h) { 255 }
+        for (t in stavesTop) for (l in 0 until 5) { val y = t + l * spacing; for (x in 20 until w - 20) img[y * w + x] = 0 }
+        // «нотные палочки» и текст — не должны сбивать
+        for (x in 100 until 104) for (y in 0 until h step 3) img[y * w + x] = 0
+        return img
+    }
+
+    @Test fun findsSixStaves() {
+        val tops = listOf(60, 140, 200, 360, 440, 500)
+        val st = ru.partitrainer.core.omr.StaffFinder.find(page(600, 800, tops, 8), 600, 800)
+        assertEquals(6, st.size)
+        assertEquals(tops, st.map { it.top })
+        assertEquals(3, ru.partitrainer.core.omr.StaffFinder.perSystem(st.size))
+        assertEquals(listOf(60, 360), ru.partitrainer.core.omr.StaffFinder.select(st, 0).map { it.top })
+        assertEquals(listOf(200, 500), ru.partitrainer.core.omr.StaffFinder.select(st, 2).map { it.top })
+        assertEquals(6, ru.partitrainer.core.omr.StaffFinder.select(st, null).size)
+    }
+
+    @Test fun emptyPage() {
+        assertTrue(ru.partitrainer.core.omr.StaffFinder.find(IntArray(100 * 100) { 255 }, 100, 100).isEmpty())
+    }
+}

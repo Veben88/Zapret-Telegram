@@ -1,0 +1,46 @@
+name: Android CI
+
+on:
+  push:
+    paths: ['parts-trainer/**', '.github/workflows/android.yml']
+  pull_request:
+    paths: ['parts-trainer/**', '.github/workflows/android.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: parts-trainer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Юнит-тесты (core + app)
+        run: ./gradlew :core:test :app:testDebugUnitTest --stacktrace
+      - name: Lint
+        run: ./gradlew :app:lintDebug --stacktrace
+      - name: Отладочный APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports
+          path: |
+            parts-trainer/core/build/reports/tests
+            parts-trainer/app/build/reports/tests
+            parts-trainer/app/build/reports/lint-results-debug.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: parts-trainer/app/build/outputs/apk/debug/*.apk
