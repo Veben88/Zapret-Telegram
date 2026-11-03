@@ -40,6 +40,7 @@ import ru.partitrainer.core.music.Phrase
 import ru.partitrainer.core.music.Ranges
 import ru.partitrainer.ui.appViewModel
 import ru.partitrainer.ui.components.LocalNotation
+import ru.partitrainer.ui.components.ScoreView
 import ru.partitrainer.ui.components.SpellingState
 import ru.partitrainer.ui.components.NoteChip
 import ru.partitrainer.ui.components.PianoKeyboard
@@ -56,7 +57,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     val d by vm.derived.collectAsState()
     val pos by vm.position.collectAsState()
     val ctx = LocalContext.current
-    val wide = LocalConfiguration.current.screenWidthDp >= 840
+    val wide = LocalConfiguration.current.screenWidthDp >= 600
     val notation = ui.settings.notation
     var exportMenu by remember { mutableStateOf(false) }
 
@@ -85,7 +86,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     // Текущая фраза под указателем (только пока играет): первая, чей конец ещё впереди
     val curPhrase = if (active && d.phrases.isNotEmpty()) d.phrases.indexOfFirst { pos.beat < it.endBeat - 1e-9 }.let { if (it < 0) d.phrases.lastIndex else it } else -1
     val listState = rememberLazyListState()
-    LaunchedEffect(curPhrase) { if (curPhrase >= 0) listState.animateScrollToItem(if (wide) curPhrase else curPhrase + 1) }
+    LaunchedEffect(curPhrase) { if (curPhrase >= 0) listState.animateScrollToItem(curPhrase + 1) }
     val targets: Set<Int> = buildSet {
         pos.activeMain.forEach { notes.getOrNull(it)?.let { n -> add(n.midi) } }
         ui.selectedNote?.let { notes.getOrNull(it)?.let { n -> add(n.midi) } }
@@ -93,6 +94,19 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     }
     val kbLow = (d.range?.low ?: 55) - 2
     val kbHigh = (d.range?.high ?: 76) + 2
+
+    val transport: @Composable () -> Unit = {
+        if (totalBeats > 0) PlayheadBar(pos.beat, pos.countInBeat, totalBeats, active, d, notes, curPhrase, { b -> vm.playFrom(b) }, vm::stop)
+    }
+    val keyboard: @Composable () -> Unit = {
+        PianoKeyboard(kbLow, kbHigh, notation, targets, pos.activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::tapKey, Modifier.padding(vertical = 6.dp))
+    }
+    // Нотный стан с бегущей кареткой; касание такта — играть оттуда
+    val scoreView: @Composable (Modifier) -> Unit = { m ->
+        val spec = d.spec
+        if (spec != null) ScoreView(spec, d.playMap, pos.beat, showCaret = active, onSeek = { ob -> vm.playFrom(d.playMap.expandedBeat(ob), false) }, modifier = m)
+        else Box(m) {}
+    }
 
     CompositionLocalProvider(LocalNotation provides notation) {
         Scaffold(
@@ -114,33 +128,46 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
                 )
             },
             bottomBar = {
-                Surface(tonalElevation = 3.dp) {
+                // Планшет: управление позицией и клавиатура — внизу на всю ширину. Телефон: всё это в шторке.
+                if (wide) Surface(tonalElevation = 3.dp) {
                     Column {
-                        if (totalBeats > 0) PlayheadBar(pos.beat, pos.countInBeat, totalBeats, active, d, notes, curPhrase, { b -> vm.playFrom(b) }, vm::stop)
+                        transport()
                         if (ui.micOn) MicPanel(ui, vm)
-                        PianoKeyboard(kbLow, kbHigh, notation, targets, pos.activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::tapKey, Modifier.padding(vertical = 6.dp))
+                        keyboard()
                     }
                 }
             },
         ) { pad ->
             val controls: @Composable () -> Unit = { Controls(vm, ui, d, onMic = { withMic(null) }) }
-            val phrases: LazyListScopeContent = { scope ->
-                scope.itemsIndexed(d.phrases) { i, ph ->
-                    PhraseCard(i, ph, notes.subList(ph.from, ph.to), ph.from, d.voice?.kind, notation, pos.activeMain,
-                        singActive = ui.singing?.takeIf { it.phrase == i }?.activeIndex, selected = ui.selectedNote,
-                        looping = ui.loopPhrase == i, playing = ui.playing,
-                        progress = if (i == curPhrase) ((pos.beat - ph.startBeat) / (ph.endBeat - ph.startBeat).coerceAtLeast(1e-6)).toFloat().coerceIn(0f, 1f) else null,
-                        onNote = vm::tapNote,
-                        onPlay = { vm.playPhrase(i, false) }, onLoop = { vm.playPhrase(i, true) }, onStop = vm::stop,
-                        onSing = { withMic(i) }, bpmBeats = d.bpm)
+            val list: @Composable (Modifier) -> Unit = { m ->
+                LazyColumn(m, state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
+                    item { controls() }
+                    itemsIndexed(d.phrases) { i, ph ->
+                        PhraseCard(i, ph, notes.subList(ph.from, ph.to), ph.from, d.voice?.kind, notation, pos.activeMain,
+                            singActive = ui.singing?.takeIf { it.phrase == i }?.activeIndex, selected = ui.selectedNote,
+                            looping = ui.loopPhrase == i, playing = ui.playing,
+                            progress = if (i == curPhrase) ((pos.beat - ph.startBeat) / (ph.endBeat - ph.startBeat).coerceAtLeast(1e-6)).toFloat().coerceIn(0f, 1f) else null,
+                            onNote = vm::tapNote,
+                            onPlay = { vm.playPhrase(i, false) }, onLoop = { vm.playPhrase(i, true) }, onStop = vm::stop,
+                            onSing = { withMic(i) }, bpmBeats = d.bpm)
+                    }
                 }
             }
             if (wide) Row(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                LazyColumn(Modifier.weight(0.6f).fillMaxHeight(), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp)) { phrases(this) }
-                Column(Modifier.weight(0.4f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) { controls() }
-            } else LazyColumn(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
-                item { controls() }
-                phrases(this)
+                scoreView(Modifier.weight(0.56f).fillMaxHeight())
+                list(Modifier.weight(0.44f).fillMaxHeight())
+            } else {
+                val sheetMax = (LocalConfiguration.current.screenHeightDp * 0.78f).dp
+                BottomSheetScaffold(
+                    modifier = Modifier.padding(pad),
+                    sheetPeekHeight = 128.dp,
+                    sheetContent = {
+                        transport()
+                        if (ui.micOn) MicPanel(ui, vm)
+                        keyboard()
+                        list(Modifier.heightIn(max = sheetMax).padding(horizontal = 12.dp))
+                    },
+                ) { inner -> scoreView(Modifier.padding(inner).fillMaxSize().padding(horizontal = 6.dp)) }
             }
         }
     }
@@ -182,7 +209,6 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     )
 }
 
-private typealias LazyListScopeContent = (androidx.compose.foundation.lazy.LazyListScope) -> Unit
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

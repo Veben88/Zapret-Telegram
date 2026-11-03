@@ -28,6 +28,9 @@ import ru.partitrainer.core.model.Note
 import ru.partitrainer.core.model.Voice
 import ru.partitrainer.core.model.VoiceKind
 import ru.partitrainer.core.music.MidiRange
+import ru.partitrainer.core.notation.Clef
+import ru.partitrainer.core.notation.PlayMap
+import ru.partitrainer.ui.components.ScoreSpec
 import ru.partitrainer.core.music.Phrase
 import ru.partitrainer.core.music.PhraseSplitter
 import ru.partitrainer.core.music.Ranges
@@ -46,6 +49,9 @@ data class SingState(val phrase: Int, val activeIndex: Int, val countIn: Boolean
 class Derived(
     val voice: Voice?, val others: List<Voice>, val phrases: List<Phrase>, val range: MidiRange?,
     val baseRange: MidiRange?, val expansion: Expansion, val hasStructure: Boolean, val bpm: Double,
+    /** Нотный стан выбранного голоса «как напечатано» и карта повторов для каретки. */
+    val spec: ScoreSpec? = null,
+    val playMap: PlayMap = PlayMap(emptyList(), null),
 )
 
 data class TrainerUi(
@@ -114,7 +120,16 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
         val bpm = p.score.beatsPerMeasure
         val phrases = voice?.let { PhraseSplitter.split(it.notes, bpm, u.measuresPerPhrase, if (doExpand) emptySet() else p.lineBreaks) }.orEmpty()
         val base = p.score.voices.firstOrNull { it.id == voice?.id }?.notes?.let { Ranges.actual(it) }
-        _derived.value = Derived(voice, voices.filter { it.id != voice?.id }, phrases, voice?.notes?.let { Ranges.actual(it) }, base, exp, hasStructure, bpm)
+        val printed = p.score.voices.firstOrNull { it.id == voice?.id }
+        val spec = printed?.let {
+            ScoreSpec(
+                notes = Transpose.notes(it.notes, u.transpose), marks = marks, fifths = p.score.keyFifths, timeNum = p.score.timeNum, timeDen = p.score.timeDen,
+                beatsPerMeasure = bpm, clef = if (it.kind == VoiceKind.BASS) Clef.BASS else Clef.TREBLE,
+                writtenShift = if (it.kind == VoiceKind.TENOR) 12 else 0,
+            )
+        }
+        _derived.value = Derived(voice, voices.filter { it.id != voice?.id }, phrases, voice?.notes?.let { Ranges.actual(it) }, base, exp, hasStructure, bpm,
+            spec, PlayMap(marks, if (doExpand) exp.order else null))
     }
 
     private fun persist() {
