@@ -63,7 +63,7 @@ class HomrPipeline(
     private val vocab = HomrVocab.fromResources()
 
     /** Время этапов последней страницы, мс (для профилирования и тестов). */
-    val timings = LinkedHashMap<String, Long>()
+    val timings: MutableMap<String, Long> = java.util.Collections.synchronizedMap(LinkedHashMap())
     @Volatile var lastS2s: Staff2Score? = null
     /** Использовался ли быстрый поиск линеек без нейросети (последняя страница). */
     @Volatile var usedClassic = false
@@ -117,10 +117,12 @@ class HomrPipeline(
         accurate: Boolean = false,
         onProgress: (done: Int, total: Int, message: String) -> Unit = { _, _, _ -> },
         isCancelled: () -> Boolean = { false },
+        /** Уже найденные нотоносцы (подготовлены заранее, пока читалась предыдущая страница). */
+        located: Located? = null,
     ): PageTokens {
         timings.clear()
         onProgress(0, 1, "Подготовка страницы")
-        val loc = locate(gray, accurate, onProgress, isCancelled)
+        val loc = located ?: locate(gray, accurate, onProgress, isCancelled)
         val page = loc.page; val staves = loc.staves; val systems = loc.systems
         if (staves.isEmpty()) return PageTokens(0, emptyList(), emptyList(), emptyList())
         val chosen = systems.mapNotNull { sys -> (staffInSystem?.takeIf { it < sys.size } ?: if (staffInSystem != null) null else StaffDetector.indexInSystem(selection, sys.size))?.let { sys[it] } }
@@ -147,10 +149,11 @@ class HomrPipeline(
         accurate: Boolean = false,
         onProgress: (done: Int, total: Int, message: String) -> Unit = { _, _, _ -> },
         isCancelled: () -> Boolean = { false },
+        located: Located? = null,
     ): List<List<StaffRead>> {
         timings.clear()
         onProgress(0, 1, "Подготовка страницы")
-        val loc = locate(gray, accurate, onProgress, isCancelled)
+        val loc = located ?: locate(gray, accurate, onProgress, isCancelled)
         val page = loc.page; val staves = loc.staves; val systems = loc.systems
         if (staves.isEmpty()) return emptyList()
         val s2s = Staff2Score(env, encSession, decSession, vocab, if (serialEncoder) encLock else null)

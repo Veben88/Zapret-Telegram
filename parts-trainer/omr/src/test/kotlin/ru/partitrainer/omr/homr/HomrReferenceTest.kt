@@ -633,4 +633,95 @@ class HomrReferenceTest {
             }
         }
     }
+
+    /** Разрешение входа: HOMR_RES=dirA|dirB|name1,name2 — одна и та же страница в двух разрешениях. */
+    @Test fun inputResolution() {
+        val spec = System.getenv("HOMR_RES")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val (da, db, names) = spec!!.split('|')
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        fun bad(t: List<EncodedSymbol>) = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(TokenParser.parse(listOf(t))).size
+        var badA = 0; var badB = 0; var same = 0; var tot = 0; var prepA = 0L; var prepB = 0L; var staffA = 0; var staffB = 0
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            for (n in names.split(',')) {
+                val ra = pl.recognizeAll(loadGray(File(da, "$n.png"))); prepA += (pl.timings["prep"] ?: 0)
+                val rb = pl.recognizeAll(loadGray(File(db, "$n.png"))); prepB += (pl.timings["prep"] ?: 0)
+                val ta = ra.flatten().map { it.tokens }; val tb = rb.flatten().map { it.tokens }
+                staffA += ta.size; staffB += tb.size
+                badA += ta.sumOf { bad(it) }; badB += tb.sumOf { bad(it) }
+                tot += minOf(ta.size, tb.size); same += ta.indices.count { ta[it] == tb.getOrNull(it) }
+                println("RES $n: staves ${ta.size}/${tb.size}, bad ${ta.sumOf { bad(it) }}/${tb.sumOf { bad(it) }}, same ${ta.indices.count { ta[it] == tb.getOrNull(it) }}")
+            }
+        }
+        println("RES TOTAL staves $staffA/$staffB bad $badA/$badB same $same/$tot prep $prepA/$prepB ms")
+    }
+
+    @Test fun locateCompare() {
+        val spec = System.getenv("HOMR_LOC")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder"))).use { pl ->
+            for (path in spec!!.split(',')) {
+                val loc = pl.locate(loadGray(File(path)), false, { _, _, _ -> }, { false })
+                println("LOC $path classic=${pl.usedClassic} angle=${loc.angle} staves=${loc.staves.size} systems=${loc.systems.map { it.size }}")
+                loc.staves.forEach { println("   y ${it.minY}-${it.maxY} x ${it.minX}-${it.maxX} u=${"%.1f".format(it.unit)}") }
+            }
+        }
+    }
+
+    @Test fun linesNearY() {
+        val spec = System.getenv("HOMR_LINES")?.takeIf { it.isNotBlank() }
+        assumeTrue(spec != null)
+        val (path, ys) = spec!!.split('@')
+        val page = ImageOps.clahe(ImageOps.resizeToHomrWidth(loadGray(File(path))))
+        val lines = StaffDetector.findLines(ClassicStaffMask.mask(page))
+        val y0 = ys.toInt()
+        for (l in lines) { val ym = l.y((l.minX + l.maxX) / 2.0); if (ym in (y0 - 20.0)..(y0 + 80.0)) println("LINE y=%.1f x=%d-%d".format(ym, l.minX, l.maxX)) }
+    }
+
+    /** Сколько строк без единой ноты (только паузы): HOMR_EMPTY=dir:p1,... */
+    @Test fun emptyStaves() {
+        val spec = System.getenv("HOMR_EMPTY")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        var total = 0; var empty = 0; var steps = 0; var emptySteps = 0
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val reads = pl.recognizeAll(loadGray(File(dir, "$name.png"))).flatten()
+                    for (r in reads) {
+                        total++; steps += r.tokens.size
+                        if (r.tokens.none { it.rhythm.startsWith("note_") }) { empty++; emptySteps += r.tokens.size; println("EMPTY $name staff ${r.system}/${r.indexInSystem}: ${r.tokens.joinToString(" ") { it.rhythm }}") }
+                    }
+                }
+            }
+        }
+        println("EMPTY TOTAL $empty of $total staves, tokens $emptySteps of $steps")
+    }
+
+    /** Подготовка следующей страницы параллельно с чтением текущей: HOMR_PREFETCH=dir:p1,p2,... */
+    @Test fun prefetchPages() {
+        val spec = System.getenv("HOMR_PREFETCH")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val (dir, names) = spec!!.split(':')
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        val files = names.split(',').map { File(dir, "$it.png") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            pl.recognizeAll(loadGray(files[0]))
+            val t0 = System.currentTimeMillis()
+            val seq = files.map { pl.recognizeAll(loadGray(it)).flatten().map { r -> r.tokens } }
+            val t1 = System.currentTimeMillis()
+            val ex = java.util.concurrent.Executors.newSingleThreadExecutor()
+            fun prep(fl: File) = ex.submit<Pair<GrayImage, HomrPipeline.Located>> { val g = loadGray(fl); g to pl.locate(g, false, { _, _, _ -> }, { false }) }
+            var next = prep(files[0])
+            val par = files.indices.map { i ->
+                val (g, loc) = next.get()
+                if (i + 1 < files.size) next = prep(files[i + 1])
+                pl.recognizeAll(g, located = loc).flatten().map { r -> r.tokens }
+            }
+            val t2 = System.currentTimeMillis(); ex.shutdown()
+            println("PREFETCH sequential ${t1 - t0} ms, prefetch ${t2 - t1} ms, same=${seq == par}")
+        }
+    }
 }

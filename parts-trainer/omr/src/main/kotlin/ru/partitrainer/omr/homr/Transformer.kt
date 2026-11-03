@@ -60,47 +60,63 @@ class Staff2Score(
     private val cacheOut = (0 until DEPTH * 4).map { "cache_out$it" }
     private val outNames = listOf("out_rhythms", "out_pitchs", "out_lifts", "out_positions", "out_articulations", "out_slurs") + cacheOut
 
-    private fun longTensor(v: Long) = OnnxTensor.createTensor(env, LongBuffer.wrap(longArrayOf(v)), longArrayOf(1, 1))
 
     /** [canvas] — изображение строки 256×1280 (белый фон). */
-    fun predict(canvas: GrayImage, isCancelled: () -> Boolean = { false }): List<EncodedSymbol> {
+    fun predict(canvas: GrayImage, isCancelled: () -> Boolean = { false }): List<EncodedSymbol> = predictBatch(listOf(canvas), isCancelled)[0]
+
+    /** Контекст энкодера [1, N, 512] для одной строки. */
+    private fun encode(canvas: GrayImage): Pair<FloatArray, LongArray> {
         require(canvas.width == WIDTH && canvas.height == HEIGHT)
         val x = FloatArray(HEIGHT * WIDTH) { (((canvas.data[it].toInt() and 0xFF) / 255.0 - MEAN) / STD).toFloat() }
-        val ctxTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(x), longArrayOf(1, 1, HEIGHT.toLong(), WIDTH.toLong()))
         val te = System.nanoTime()
-        val ctxResult = ctxTensor.use { t -> if (encoderLock != null) synchronized(encoderLock) { encoder.run(mapOf(encoder.inputNames.first() to t)) } else encoder.run(mapOf(encoder.inputNames.first() to t)) }
-        encoderMs += (System.nanoTime() - te) / 1_000_000
-        ctxResult.use { encRes ->
-            val ctx = encRes[0] as OnnxTensor
-            val ctxShape = ctx.info.shape                      // [1, N, 512]
-            val full = FloatArray(ctx.floatBuffer.remaining()).also { ctx.floatBuffer.duplicate().get(it) }
-            val dim = ctxShape[2].toInt()
-            val reduced = full.copyOfRange(0, dim)            // context[:, :1]
-            val fullTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(full), ctxShape)
-            val redTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(reduced), longArrayOf(1, 1, dim.toLong()))
-            val td = System.nanoTime()
-            try {
-                return decode(fullTensor, redTensor, isCancelled)
-            } finally {
-                decoderMs += (System.nanoTime() - td) / 1_000_000
-                fullTensor.close(); redTensor.close()
+        try {
+            OnnxTensor.createTensor(env, FloatBuffer.wrap(x), longArrayOf(1, 1, HEIGHT.toLong(), WIDTH.toLong())).use { t ->
+                val res = if (encoderLock != null) synchronized(encoderLock) { encoder.run(mapOf(encoder.inputNames.first() to t)) } else encoder.run(mapOf(encoder.inputNames.first() to t))
+                res.use {
+                    val ctx = it[0] as OnnxTensor
+                    return FloatArray(ctx.floatBuffer.remaining()).also { a -> ctx.floatBuffer.duplicate().get(a) } to ctx.info.shape
+                }
             }
+        } finally { encoderMs += (System.nanoTime() - te) / 1_000_000 }
+    }
+
+    /** Чтение строк; батч (>1 строки за прогон) возможен только с декодером, у которого размер батча не зашит в модель. */
+    fun predictBatch(canvases: List<GrayImage>, isCancelled: () -> Boolean = { false }): List<List<EncodedSymbol>> {
+        if (canvases.isEmpty()) return emptyList()
+        val encoded = canvases.map { if (isCancelled()) throw InterruptedException("Отменено"); encode(it) }
+        val b = canvases.size
+        val n = encoded[0].second[1].toInt(); val dim = encoded[0].second[2].toInt()
+        val full = FloatArray(b * n * dim); val reduced = FloatArray(b * dim)
+        for ((i, e) in encoded.withIndex()) {
+            System.arraycopy(e.first, 0, full, i * n * dim, n * dim)
+            System.arraycopy(e.first, 0, reduced, i * dim, dim)        // context[:, :1]
+        }
+        val fullT = OnnxTensor.createTensor(env, FloatBuffer.wrap(full), longArrayOf(b.toLong(), n.toLong(), dim.toLong()))
+        val redT = OnnxTensor.createTensor(env, FloatBuffer.wrap(reduced), longArrayOf(b.toLong(), 1, dim.toLong()))
+        val td = System.nanoTime()
+        try {
+            return decode(b, fullT, redT, isCancelled)
+        } finally {
+            decoderMs += (System.nanoTime() - td) / 1_000_000
+            fullT.close(); redT.close()
         }
     }
 
-    private fun decode(ctxFull: OnnxTensor, ctxReduced: OnnxTensor, isCancelled: () -> Boolean): List<EncodedSymbol> {
-        val symbols = ArrayList<EncodedSymbol>()
-        var rhythm = 1L; var pitch = 0L; var lift = 0L; var art = 0L; var slur = 0L
+    private fun decode(b: Int, ctxFull: OnnxTensor, ctxReduced: OnnxTensor, isCancelled: () -> Boolean): List<List<EncodedSymbol>> {
+        val symbols = List(b) { ArrayList<EncodedSymbol>() }
+        val done = BooleanArray(b)
+        val rhythm = LongArray(b) { 1L }; val pitch = LongArray(b); val lift = LongArray(b); val art = LongArray(b); val slur = LongArray(b)
         var cache: ai.onnxruntime.OrtSession.Result? = null
-        var emptyCache: List<OnnxTensor> = (0 until DEPTH * 4).map {
-            OnnxTensor.createTensor(env, FloatBuffer.allocate(0), longArrayOf(1, HEADS.toLong(), 0, HEAD_DIM.toLong()))
+        val emptyCache: List<OnnxTensor> = (0 until DEPTH * 4).map {
+            OnnxTensor.createTensor(env, FloatBuffer.allocate(0), longArrayOf(b.toLong(), HEADS.toLong(), 0, HEAD_DIM.toLong()))
         }
+        fun longs(v: LongArray) = OnnxTensor.createTensor(env, LongBuffer.wrap(v.copyOf()), longArrayOf(b.toLong(), 1))
         try {
             for (step in 0 until MAX_SEQ_LEN) {
                 if (isCancelled()) throw InterruptedException("Отменено")
                 val inputs = HashMap<String, OnnxTensor>()
                 val toClose = ArrayList<OnnxTensor>()
-                fun t(v: Long) = longTensor(v).also { toClose += it }
+                fun t(v: LongArray) = longs(v).also { toClose += it }
                 inputs["rhythms"] = t(rhythm); inputs["pitchs"] = t(pitch); inputs["lifts"] = t(lift)
                 inputs["articulations"] = t(art); inputs["slurs"] = t(slur)
                 inputs["context"] = if (step == 0) ctxFull else ctxReduced
@@ -111,22 +127,27 @@ class Staff2Score(
                 cache?.close()
                 cache = result
 
-                fun argmaxLast(idx: Int): Int {
+                fun argmaxLast(idx: Int, row: Int): Int {
                     val o = result.get(outNames[idx]).get() as OnnxTensor
-                    val shape = o.info.shape                    // [1, T, V]
+                    val shape = o.info.shape                    // [B, T, V]
                     val vSize = shape[2].toInt(); val tSize = shape[1].toInt()
                     val buf = o.floatBuffer
-                    val base = (tSize - 1) * vSize
+                    val base = (row * tSize + tSize - 1) * vSize
                     var best = 0; var bv = buf.get(base)
                     for (i in 1 until vSize) { val v = buf.get(base + i); if (v > bv) { bv = v; best = i } }
                     return best
                 }
-                val r = argmaxLast(0); val p = argmaxLast(1); val l = argmaxLast(2)
-                val pos = argmaxLast(3); val a = argmaxLast(4); val s = argmaxLast(5)
-                if (r == EOS) break
-                steps++
-                symbols += EncodedSymbol(vocab.rhythm[r], vocab.pitch[p], vocab.lift[l], vocab.articulation[a], vocab.slur[s], vocab.position[pos])
-                rhythm = r.toLong(); pitch = p.toLong(); lift = l.toLong(); art = a.toLong(); slur = s.toLong()
+                for (row in 0 until b) {
+                    if (done[row]) continue
+                    val r = argmaxLast(0, row)
+                    if (r == EOS) { done[row] = true; continue }
+                    val p = argmaxLast(1, row); val l = argmaxLast(2, row)
+                    val pos = argmaxLast(3, row); val a = argmaxLast(4, row); val s = argmaxLast(5, row)
+                    steps++
+                    symbols[row] += EncodedSymbol(vocab.rhythm[r], vocab.pitch[p], vocab.lift[l], vocab.articulation[a], vocab.slur[s], vocab.position[pos])
+                    rhythm[row] = r.toLong(); pitch[row] = p.toLong(); lift[row] = l.toLong(); art[row] = a.toLong(); slur[row] = s.toLong()
+                }
+                if (done.all { it }) break
             }
         } finally {
             cache?.close()

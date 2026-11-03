@@ -2,6 +2,7 @@ package ru.partitrainer.omr
 
 import android.graphics.Bitmap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -58,15 +59,18 @@ class HomrOnDeviceEngine(
         try {
             withContext(Dispatchers.Default) {
                 newPipeline(files, text).use { pipeline ->
+                    // Следующая страница рендерится и размечается (поиск линеек), пока нейросеть читает текущую
+                    fun prep(page: Int) = async { prepare(pipeline, request, page, ctx) }
+                    var next = request.pages.firstOrNull()?.let { prep(it) }
                     for ((i, page) in request.pages.withIndex()) {
                         ctx.ensureActive()
                         onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: подготовка"))
-                        val bmp = request.provider.render(page)
-                        val gray = try { toGray(bmp) } finally { bmp.recycle() }
+                        val (gray, loc) = next!!.await()
+                        next = request.pages.getOrNull(i + 1)?.let { prep(it) }
                         val r = pipeline.recognizePage(
                             gray, sel, accurate = request.accurate,
                             onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) },
-                            isCancelled = { !ctx.isActive },
+                            isCancelled = { !ctx.isActive }, located = loc,
                         )
                         tokens += r.staffs
                         lines += r.staffs.indices.map { r.lyrics.getOrNull(it).orEmpty() }
@@ -108,14 +112,19 @@ class HomrOnDeviceEngine(
             withContext(Dispatchers.Default) {
                 var pipeline: HomrPipeline? = null
                 try {
+                    val todo = request.pages.filter { it !in choirPages }
+                    fun prep(page: Int) = async {
+                        val p = synchronized(this@HomrOnDeviceEngine) { pipeline ?: newPipeline(files, text).also { pipeline = it } }
+                        prepare(p, request, page, ctx)
+                    }
+                    var next = todo.firstOrNull()?.let { it to prep(it) }
                     for ((i, page) in request.pages.withIndex()) {
                         ctx.ensureActive()
                         val systems = choirPages[page] ?: run {
                             onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: подготовка"))
-                            val p = pipeline ?: newPipeline(files, text).also { pipeline = it }
-                            val bmp = request.provider.render(page)
-                            val gray = try { toGray(bmp) } finally { bmp.recycle() }
-                            p.recognizeAll(gray, accurate = request.accurate, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive })
+                            val (gray, loc) = next!!.second.await()
+                            next = todo.getOrNull(todo.indexOf(page) + 1)?.let { it to prep(it) }
+                            pipeline!!.recognizeAll(gray, accurate = request.accurate, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive }, located = loc)
                                 .also { choirPages[page] = it }
                         }
                         if (request.twoStaffChoir) {
@@ -157,6 +166,13 @@ class HomrOnDeviceEngine(
             files, threads = perf, staffWorkers = perf.coerceIn(1, 4), text = text,
             decoderThreads = 1, encoderThreads = if (big) 1 else 2.coerceAtMost(perf), serialEncoder = !big,
         )
+    }
+
+    /** Рендер страницы и поиск нотоносцев (то, что можно делать параллельно с чтением предыдущей страницы). */
+    private suspend fun prepare(pipeline: HomrPipeline, request: OmrRequest, page: Int, ctx: kotlin.coroutines.CoroutineContext): Pair<GrayImage, HomrPipeline.Located> {
+        val bmp = request.provider.render(page)
+        val gray = try { toGray(bmp) } finally { bmp.recycle() }
+        return gray to pipeline.locate(gray, request.accurate, { _, _, _ -> }, { !ctx.isActive })
     }
 
     private fun toGray(bmp: Bitmap): GrayImage {

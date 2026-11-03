@@ -38,6 +38,32 @@ class PageRenderer(private val file: File, private val isPdf: Boolean) : AutoClo
         mutex.withLock { rotate(renderLocked(index, DPI, MAX_PIXELS), rotation) }
     }
 
+    /**
+     * Страница для распознавания на устройстве: сразу нужной ширины (1920 px после поворота), а не 200 dpi с последующим
+     * растяжением — меньше работы и чётче линии. Фото не увеличиваются, только уменьшаются.
+     */
+    suspend fun renderForOmr(index: Int, rotation: Int = 0, width: Int = 1920): Bitmap = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (!isPdf) return@withLock rotate(renderLocked(index, DPI, MAX_PIXELS), rotation)
+            pageCount
+            val r = renderer ?: throw IllegalStateException("PDF закрыт")
+            val d = ((rotation % 360) + 360) % 360
+            val bmp = r.openPage(index).use { page ->
+                val across = if (d == 90 || d == 270) page.height else page.width
+                var scale = width.toFloat() / across
+                val px = page.width.toDouble() * scale * page.height * scale
+                if (px > MAX_PIXELS) scale *= Math.sqrt(MAX_PIXELS / px).toFloat()
+                val w = (page.width * scale).toInt().coerceAtLeast(1)
+                val h = (page.height * scale).toInt().coerceAtLeast(1)
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
+                    it.eraseColor(Color.WHITE)
+                    page.render(it, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                }
+            }
+            rotate(bmp, rotation)
+        }
+    }
+
     /** Миниатюра заданной ширины. */
     suspend fun thumbnail(index: Int, widthPx: Int, rotation: Int = 0): Bitmap = withContext(Dispatchers.IO) {
         mutex.withLock { rotate(renderLocked(index, 0, 0, widthPx), rotation) }

@@ -222,16 +222,43 @@ object StaffDetector {
         val typicalGap = gaps.getOrNull(gaps.size / 2)?.toDouble()
         val out = ArrayList<DetectedStaff>()
         val free = lines.indices.filter { !used[it] }.sortedBy { lines[it].y((lines[it].minX + lines[it].maxX) / 2.0) }
-        var i = 0
-        while (i + 3 < free.size) {
-            val c = intArrayOf(free[i], free[i + 1], free[i + 2], free[i + 3]).map { lines[it] }
+        val taken = HashSet<Int>()
+        fun ov(a: Line, b: Line) = min(a.maxX, b.maxX) - max(a.minX, b.minX)
+        // Четыре равноотстоящие линии ищем не только среди соседних: рядом бывают обрывки (балки, лиги на линейке),
+        // которые иначе ломают последовательность.
+        for ((ii, a) in free.withIndex()) {
+            if (a in taken) continue
+            val la = lines[a]
+            var found4: IntArray? = null
+            for (jj in ii + 1 until free.size) {
+                val b = free[jj]; if (b in taken) continue
+                val lb = lines[b]
+                if (ov(la, lb) < 600) continue
+                val xc0 = (max(la.minX, lb.minX) + min(la.maxX, lb.maxX)) / 2.0
+                // b — четвёртая линия: шаг считаем по всему размаху (по двум соседним линиям он слишком неточен)
+                val d = (lb.y(xc0) - la.y(xc0)) / 3.0
+                if (d < 6) continue
+                if (d > 40) break
+                val chain = intArrayOf(a, -1, -1, b)
+                for (k in 1..2) {
+                    val target = la.y(xc0) + k * d
+                    // среди подходящих по высоте берём самую длинную: рядом с линейкой бывают обрывки балок
+                    chain[k] = free.subList(ii + 1, jj).filter { it !in taken && ov(la, lines[it]) >= 600 && Math.abs(lines[it].y(xc0) - target) <= 0.15 * d }
+                        .maxByOrNull { lines[it].maxX - lines[it].minX } ?: -1
+                    if (chain[k] < 0) break
+                }
+                if (chain.all { it >= 0 }) { found4 = chain; break }
+            }
+            val ch = found4 ?: continue
+            ch.forEach { taken += it }
+            val c = ch.map { lines[it] }
             val x0 = c.maxOf { it.minX }; val x1 = c.minOf { it.maxX }
-            if (x1 - x0 < 600) { i++; continue }
+            if (x1 - x0 < 600) continue
             val xc = (x0 + x1) / 2.0
             val ys = c.map { it.y(xc) }
             val g = (0 until 3).map { ys[it + 1] - ys[it] }
             val d = g.average()
-            if (d < 6 || d > 40 || g.max() - g.min() > 0.2 * d) { i++; continue }
+            if (d < 6 || d > 40 || g.max() - g.min() > 0.2 * d) continue
             val gx0 = c.minOf { it.minX }; val gx1 = c.maxOf { it.maxX }
             val xm = (gx0 + gx1) / 2.0
             val firstP = c.first().poly; val lastP = c.last().poly
@@ -252,7 +279,6 @@ object StaffDetector {
             val chosen = if (topCost < bottomCost) Triple(topCand.first, topCand.second, d) else Triple(bottomCand.first, bottomCand.second, d)
             val (tp, bp, _) = chosen
             out += DetectedStaff(gx0, gx1, tp.at(xm).toInt(), bp.at(xm).toInt(), d, tp, bp)
-            i += 4
         }
         return out
     }

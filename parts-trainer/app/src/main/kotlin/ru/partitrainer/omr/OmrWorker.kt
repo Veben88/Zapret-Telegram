@@ -115,7 +115,7 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
             var layout: ru.partitrainer.core.omr.SourceLayout? = null
             try {
                 for ((si, staff) in staffs.withIndex()) {
-                    val parsed = engine.recognize(OmrRequest(job.pages, staff, { p -> renderer.render(p, rotByPage[p] ?: 0) }, job.twoStaffChoir, job.accurate, job.lyrics)) { pr ->
+                    val parsed = engine.recognize(OmrRequest(job.pages, staff, { p -> renderer.renderForOmr(p, rotByPage[p] ?: 0) }, job.twoStaffChoir, job.accurate, job.lyrics)) { pr ->
                         val done = si * job.pages.size + pr.done
                         // Сообщение о ходе работы и счётчики (setProgress в корутине — через launch не нужен: вызываем из колбэка синхронно)
                         publish(done, totalUnits, pr.message)
