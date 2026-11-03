@@ -14,14 +14,25 @@ android {
         applicationId = "ru.partitrainer"
         minSdk = 26
         targetSdk = 35
-        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
-        versionName = (project.findProperty("versionName") as String?) ?: "0.1.0"
+        // Номер сборки растёт с каждым запуском CI, иначе Android не сочтёт новый APK обновлением.
+        val run = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: run ?: 1
+        versionName = (project.findProperty("versionName") as String?) ?: (if (run != null) "0.1.$run" else "0.1.0")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // Подпись релиза — только из переменных окружения (секреты CI); в репозитории ключей нет.
     val ksPath = System.getenv("KEYSTORE_PATH")
     signingConfigs {
+        // Отладочные APK всегда подписываются одним и тем же ключом из репозитория. Без этого каждая сборка CI получала
+        // случайный ключ, и новый APK не устанавливался поверх прежнего («приложение не установлено»).
+        // Ключ публичный по определению — для релизов он не используется (см. release ниже).
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         if (ksPath != null) {
             create("release") {
                 storeFile = file(ksPath)
