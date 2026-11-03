@@ -174,6 +174,9 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
                 for ((sel, label) in listOf(
                     StaffSelection.VOCAL_TOP to R.string.staff_vocal, StaffSelection.RIGHT_HAND to R.string.staff_right,
                     StaffSelection.LEFT_HAND to R.string.staff_left, StaffSelection.ALL to R.string.staff_all,
+                    StaffSelection.SOPRANO to R.string.staff_soprano, StaffSelection.ALTO to R.string.staff_alto,
+                    StaffSelection.TENOR to R.string.staff_tenor, StaffSelection.BASS to R.string.staff_bass,
+                    StaffSelection.CHOIR_ALL to R.string.staff_choir_all,
                 )) {
                     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(staff == sel, role = Role.RadioButton, onClick = { vm.staff.value = sel }), verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(staff == sel, onClick = null); Spacer(Modifier.width(12.dp)); Text(stringResource(label))
@@ -196,7 +199,7 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
                                 if (t == null) CircularProgressIndicator() else {
                                     Box {
                                         Image(t.bitmap.asImageBitmap(), stringResource(R.string.page_n, i + 1), contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-                                        val sel = when (staff) { StaffSelection.VOCAL_TOP -> 0; StaffSelection.RIGHT_HAND -> 1; StaffSelection.LEFT_HAND -> 2; StaffSelection.ALL -> null }
+                                        val sel = when (staff) { StaffSelection.VOCAL_TOP -> 0; StaffSelection.RIGHT_HAND -> 1; StaffSelection.LEFT_HAND -> 2; StaffSelection.ALL -> null; else -> null }
                                         val hi = StaffFinder.select(t.staves, sel)
                                         val color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f)
                                         Canvas(Modifier.matchParentSize()) {

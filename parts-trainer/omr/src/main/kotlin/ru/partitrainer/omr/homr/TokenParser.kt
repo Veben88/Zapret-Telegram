@@ -9,6 +9,9 @@ import kotlin.math.roundToInt
 
 /** Превращает токены трансформера (по нотоносцам) в такты [OmrParsed] (общий формат с Claude Vision). */
 object TokenParser {
+    /** Служебный символ: пауза на целый такт (для голоса, опущенного в системе). Длина подставляется после разбора. */
+    const val REST_MEASURE = "rest_measure"
+    private const val FILL = -1.0
     private val kern = Regex("(note|rest)_(\\d+)(G?)(\\.*)")
     private val multiRest = Regex("rest_(\\d+)m")
 
@@ -35,11 +38,11 @@ object TokenParser {
         val events = ArrayList<Ev>()
         var repeatStart = false; var repeatEnd = false
         var ending: Int? = null
-        fun total() = events.sumOf { it.beats }
+        fun total() = events.sumOf { if (it.beats == FILL) 0.0 else it.beats }
     }
 
     /** @param staffs токены каждого нотоносца в порядке чтения. */
-    fun parse(staffs: List<List<EncodedSymbol>>): OmrParsed {
+    fun parse(staffs: List<List<EncodedSymbol>>, transpose: Int = 0): OmrParsed {
         var fifths: Int? = null
         var den: Int? = null
         val measures = ArrayList<Builder>()
@@ -81,6 +84,7 @@ object TokenParser {
                         if (cur.events.isEmpty()) cur.ending = null
                     }
                     multiRest.matches(r) -> { /* многотактовая пауза: отдельные такты нам не нужны */ }
+                    r == REST_MEASURE -> { cur.events += Ev(null, FILL, false, ""); prevEvent = null }
                     r.startsWith("note_") || r.startsWith("rest_") -> {
                         val b = beats(r) ?: continue
                         if (r.startsWith("rest_")) { cur.events += Ev(null, b, false, ""); prevEvent = null; continue }
@@ -88,7 +92,7 @@ object TokenParser {
                         val best = g.filter { it.rhythm.startsWith("note_") }
                             .mapNotNull { n -> midi(n.pitch, n.lift)?.let { it to n } }
                             .maxByOrNull { it.first } ?: continue
-                        val ev = Ev(best.first, b, false, best.second.slur)
+                        val ev = Ev(((best.first + transpose).coerceIn(0, 127)), b, false, best.second.slur)
                         // лига: slurStart на предыдущей ноте и slurStop на этой с той же высотой
                         val p = prevEvent
                         if (p != null && p.midi == ev.midi && p.slur.contains("slurStart") && ev.slur.contains("slurStop")) p.tie = true
@@ -104,7 +108,7 @@ object TokenParser {
 
         // Размер: знаменатель из токена, числитель — по самому частому полному такту.
         val d = den ?: 4
-        val totals = measures.map { it.total() }.filter { it > 0 }
+        val totals = measures.filter { b -> b.events.none { it.beats == FILL } }.map { it.total() }.filter { it > 0 }
         val common = totals.groupingBy { (it * 48).roundToInt() }.eachCount().maxByOrNull { it.value }?.key?.let { it / 48.0 } ?: 4.0
         val num = (common * d / 4.0).roundToInt().coerceAtLeast(1)
         val barLen = num * 4.0 / d
@@ -112,8 +116,8 @@ object TokenParser {
         val out = measures.mapIndexed { i, b ->
             OmrMeasure(
                 n = i + 1, chord = null,
-                pickup = i == 0 && b.total() < barLen - 0.02 && measures.size > 1,
-                events = b.events.map { OmrEvent(it.midi, it.beats, it.tie, null) },
+                pickup = i == 0 && b.events.none { it.beats == FILL } && b.total() < barLen - 0.02 && measures.size > 1,
+                events = b.events.map { OmrEvent(it.midi, if (it.beats == FILL) barLen else it.beats, it.tie, null) },
                 repeatStart = b.repeatStart, repeatEnd = b.repeatEnd, ending = b.ending, marks = emptyList(),
             )
         }

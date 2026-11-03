@@ -186,4 +186,9 @@
     <string name="models_downloading">Скачивание: %1$d%% (%2$d из %3$d МБ)</string>
     <string name="models_failed">Не удалось скачать модели: %1$s</string>
     <string name="models_delete">Удалить модели</string>
+    <string name="staff_soprano">Хор: сопрано</string>
+    <string name="staff_alto">Хор: альт</string>
+    <string name="staff_tenor">Хор: тенор (ключ с «8» читается на октаву ниже)</string>
+    <string name="staff_bass">Хор: бас</string>
+    <string name="staff_choir_all">Хор: все четыре голоса (S, A, T, B)</string>
 </resources>

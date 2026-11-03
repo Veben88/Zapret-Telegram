@@ -118,7 +118,7 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
                     }
                     val asm = ClaudeOmr.assemble(parsed, staff.voiceLabel)
                     if (base == null) base = asm
-                    voices += asm.score.voices.single().copy(id = "omr_${staff.key}")
+                    voices += asm.score.voices.single().copy(id = "omr_${staff.key}", kind = staff.kind)
                 }
             } catch (e: OmrException) {
                 return Result.failure(workDataOf(OmrJob.KEY_ERROR to e.userMessage, OmrJob.KEY_MANUAL to e.offerManual))

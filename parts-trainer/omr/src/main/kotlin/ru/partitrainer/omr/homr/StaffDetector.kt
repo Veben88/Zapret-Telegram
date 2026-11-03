@@ -137,6 +137,22 @@ object StaffDetector {
         return covered >= 0.9 * (y1 - y0)
     }
 
+    /**
+     * Доля тёмных пикселей под началом нотоносца, где в «теноровом» скрипичном ключе стоит маленькая «8».
+     * Область: сразу под нижней линейкой, справа от ключа, выше следующего нотоносца.
+     */
+    fun octaveMarkScore(page: GrayImage, staff: DetectedStaff, nextStaffTop: Int?): Double {
+        val u = staff.unit
+        val x0 = (staff.minX + 0.3 * u).toInt(); val x1 = (staff.minX + 3.8 * u).toInt()
+        val y0 = (staff.maxY + 1.5 * u).toInt()
+        var y1 = (staff.maxY + 3.2 * u).toInt()
+        if (nextStaffTop != null) y1 = min(y1, (nextStaffTop - 0.4 * u).toInt())
+        if (y1 <= y0 || x1 <= x0) return 0.0
+        var dark = 0; var total = 0
+        for (y in max(0, y0) until min(page.height, y1)) for (x in max(0, x0) until min(page.width, x1)) { total++; if (page[x, y] < 110) dark++ }
+        return if (total == 0) 0.0 else dark.toDouble() / total
+    }
+
     /** Индекс нужного нотоносца внутри системы; null — такого нет. */
     fun indexInSystem(sel: Staff, size: Int): Int? = when (sel) {
         Staff.VOCAL_OR_TOP -> 0

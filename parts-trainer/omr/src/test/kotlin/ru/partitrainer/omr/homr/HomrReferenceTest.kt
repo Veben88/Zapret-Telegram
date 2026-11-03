@@ -139,4 +139,80 @@ class HomrReferenceTest {
             assertTrue("correct $same of ${truth.size}", notes.size == truth.size && same >= truth.size * 0.9)
         }
     }
+
+    /** Настоящая хоровая партитура (S/A/T/B): сверка с выводом Python-homr. Нужны real/p1.png и real/p1.musicxml. */
+    @Test fun realChoirPage() {
+        val real = System.getenv("HOMR_REAL")?.takeIf { it.isNotBlank() }?.let(::File)
+        assumeTrue(models != null && real != null && File(real, "p1.png").exists())
+        val gray = loadGray(File(real, "p1.png"))
+        val py = ru.partitrainer.core.io.MusicXmlParser.parse(File(real, "p1.musicxml").inputStream()).score
+        println("python voices: " + py.voices.map { it.label + ":" + it.notes.size })
+        HomrPipeline(modelFiles()).use { p ->
+            for (idx in 0..3) {
+                val r = p.recognizePage(gray, StaffDetector.Staff.VOCAL_OR_TOP, staffInSystem = idx)
+                val parsed = TokenParser.parse(r.staffs)
+                val notes = ru.partitrainer.core.omr.ClaudeOmr.assemble(parsed).score.voices.first().notes
+                println("idx=$idx staves=${r.stavesFound} selected=${r.selected.size} key=${parsed.keyFifths} time=${parsed.timeNum}/${parsed.timeDen} notes=${notes.size}")
+                println("  " + notes.take(14).joinToString(" ") { "${ru.partitrainer.core.music.NoteNames.nameWithOctave(it.midi, ru.partitrainer.core.music.Notation.LATIN)}:${it.beats}" })
+                val pv = py.voices.getOrNull(idx)
+                if (pv != null) println("  py " + pv.notes.take(14).joinToString(" ") { "${ru.partitrainer.core.music.NoteNames.nameWithOctave(it.midi, ru.partitrainer.core.music.Notation.LATIN)}:${it.beats}" })
+            }
+        }
+    }
+
+    /** Все страницы хоровой партитуры: сохраняет ноты каждого голоса в HOMR_REAL/kt_pN_vK.txt. */
+    @Test fun realChoirAllPages() {
+        val real = System.getenv("HOMR_REAL")?.takeIf { it.isNotBlank() }?.let(::File)
+        assumeTrue(models != null && real != null && File(real, "p10.png").exists() && System.getenv("HOMR_ALL") == "1")
+        HomrPipeline(modelFiles()).use { p ->
+            for (page in 1..10) {
+                val gray = loadGray(File(real, "p$page.png"))
+                val t0 = System.currentTimeMillis()
+                for (idx in 0..3) {
+                    val r = p.recognizePage(gray, StaffDetector.Staff.VOCAL_OR_TOP, staffInSystem = idx)
+                    val parsed = TokenParser.parse(r.staffs)
+                    val notes = ru.partitrainer.core.omr.ClaudeOmr.assemble(parsed).score.voices.first().notes
+                    File(real, "kt_p${page}_v$idx.txt").writeText(notes.joinToString("\n") { "${it.midi} ${it.beats}" } + "\n")
+                    println("page $page voice $idx: staves=${r.stavesFound} selected=${r.selected.size} notes=${notes.size}")
+                }
+                println("page $page time ${System.currentTimeMillis() - t0} ms")
+            }
+        }
+    }
+
+    @Test fun octaveMarkExperiment() {
+        val real = System.getenv("HOMR_REAL")?.takeIf { it.isNotBlank() }?.let(::File)
+        assumeTrue(models != null && real != null && System.getenv("HOMR_OCT") == "1")
+        val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+        val sess = env.createSession(modelFiles().segnet.path)
+        for (pg in listOf(1, 2, 5)) {
+            val page = ImageOps.clahe(ImageOps.resizeToHomrWidth(loadGray(File(real, "p$pg.png"))))
+            val seg = Segnet(env, sess).segment(page)
+            val staves = StaffDetector.detect(seg)
+            val systems = StaffDetector.systems(staves, page)
+            for ((si, sys) in systems.withIndex()) {
+                val scores = sys.mapIndexed { i, st -> "%.3f".format(StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY)) }
+                println("page $pg system $si: $scores")
+            }
+        }
+    }
+
+    /** Хор: голоса по ключу/«8»/регистру на страницах 1, 2, 5; сверка с Python-homr (части по номеру строки). */
+    @Test fun choirVoices() {
+        val real = System.getenv("HOMR_REAL")?.takeIf { it.isNotBlank() }?.let(::File)
+        assumeTrue(models != null && real != null && System.getenv("HOMR_CHOIR") == "1")
+        fun nm(m: Int) = ru.partitrainer.core.music.NoteNames.nameWithOctave(m, ru.partitrainer.core.music.Notation.LATIN)
+        HomrPipeline(modelFiles()).use { p ->
+            for (pg in listOf(1, 5)) {
+                val systems = p.recognizeAll(loadGray(File(real, "p$pg.png")))
+                for ((si, sys) in systems.withIndex()) println("page $pg system $si: " + sys.joinToString { "${it.clef}${if (it.octave8) "8" else ""}/${it.medianMidi}" } + "  -> " + ChoirAssigner.assign(sys).entries.sortedBy { it.key }.joinToString { "${it.key.name.take(1)}=${it.value.indexInSystem}" })
+                for (v in ChoirVoice.values()) {
+                    val (tokens, shift) = ChoirAssigner.tokensFor(v, systems)
+                    val parsed = TokenParser.parse(tokens, shift)
+                    val notes = ru.partitrainer.core.omr.ClaudeOmr.assemble(parsed).score.voices.first().notes
+                    println("page $pg $v: measures=${parsed.measures.size} notes=${notes.size} shift=$shift first=" + notes.take(8).joinToString(" ") { nm(it.midi) })
+                }
+            }
+        }
+    }
 }
