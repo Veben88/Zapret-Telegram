@@ -185,14 +185,14 @@ class HomrReferenceTest {
         assumeTrue(models != null && real != null && System.getenv("HOMR_OCT") == "1")
         val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
         val sess = env.createSession(modelFiles().segnet.path)
-        for (pg in listOf(1, 2, 5)) {
+        for (pg in listOf(1, 5)) {
             val page = ImageOps.clahe(ImageOps.resizeToHomrWidth(loadGray(File(real, "p$pg.png"))))
             val seg = Segnet(env, sess).segment(page)
             val staves = StaffDetector.detect(seg)
             val systems = StaffDetector.systems(staves, page)
             for ((si, sys) in systems.withIndex()) {
                 val scores = sys.mapIndexed { i, st -> "%.3f".format(StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY)) }
-                println("page $pg system $si: $scores")
+                println("page $pg system $si: $scores  " + sys.map { "x=${it.minX}..${it.maxX} u=%.1f y=${it.minY}".format(it.unit) })
             }
         }
     }
@@ -249,12 +249,22 @@ class HomrReferenceTest {
         assumeTrue(models != null && real != null && System.getenv("HOMR_DBG") == "1")
         val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
         val sess = env.createSession(modelFiles().segnet.path)
-        val page = ImageOps.clahe(ImageOps.resizeToHomrWidth(loadGray(File(real, "p${System.getenv("HOMR_PAGE") ?: "8"}.png"))))
+        val page = ImageOps.clahe(ImageOps.resizeToHomrWidth(loadGray(File(System.getenv("HOMR_DIR") ?: real!!.path, "${System.getenv("HOMR_PAGE") ?: "p8"}.png"))))
         val seg = Segnet(env, sess).segment(page)
+        run {
+            // картинка сегментации: красный — линейки, синий — ноты, зелёный — ключи/знаки, серый — остальное
+            val out = java.awt.image.BufferedImage(page.width, page.height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+            for (y in 0 until page.height) for (x in 0 until page.width) {
+                val g = page[x, y]; val c = seg.cls[y * page.width + x].toInt()
+                val rgb = when (c) { 4 -> 0xFF0000; 2 -> 0x0000FF; 3 -> 0x00AA00; 1 -> 0xFF8800; 5 -> 0xAA00AA; else -> (g shl 16) or (g shl 8) or g }
+                out.setRGB(x, y, rgb)
+            }
+            javax.imageio.ImageIO.write(out, "png", File(System.getenv("HOMR_DIR") ?: real!!.path, (System.getenv("HOMR_PAGE") ?: "p8") + "_seg.png"))
+        }
         val lines = StaffDetector.findLines(seg)
         println("lines=" + lines.size)
         var prev = 0.0
-        for (l in lines.take(40)) { println("  y=%.1f gap=%.1f x=%d..%d".format(l.y, l.y - prev, l.minX, l.maxX)); prev = l.y }
+        for (l in lines.filter { it.y((it.minX + it.maxX) / 2.0) in 1200.0..1320.0 }) { val ym = l.y((l.minX + l.maxX) / 2.0); println("  y=%.1f gap=%.1f x=%d..%d slope=%.3f".format(ym, ym - prev, l.minX, l.maxX, l.poly.c1)); prev = ym }
         println("STAVES " + StaffDetector.groupStaves(lines, page.height).map { "${it.minY}-${it.maxY}(u=%.1f)".format(it.unit) })
     }
 
@@ -274,6 +284,36 @@ class HomrReferenceTest {
                 voices += asm.score.voices.first().copy(id = v.name, notes = notes)
             }
             File(real, "kt_p1.musicxml").writeText(ru.partitrainer.core.io.MusicXmlWriter.write(score!!.copy(voices = voices), voices))
+        }
+    }
+
+    /** Обзор произвольных страниц: HOMR_SURVEY=папка, HOMR_PAGES=a1,a2,b1 . Пишет <имя>_kt.musicxml. */
+    @Test fun survey() {
+        val dir = System.getenv("HOMR_SURVEY")?.takeIf { it.isNotBlank() }?.let(::File)
+        val pages = System.getenv("HOMR_PAGES")?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+        assumeTrue(models != null && dir != null && pages.isNotEmpty())
+        fun nm(m: Int) = ru.partitrainer.core.music.NoteNames.nameWithOctave(m, ru.partitrainer.core.music.Notation.LATIN, true)
+        HomrPipeline(modelFiles()).use { p ->
+            for (name in pages) {
+                val t0 = System.currentTimeMillis()
+                val systems = try { p.recognizeAll(loadGray(File(dir, "$name.png"))) } catch (e: Exception) { println("PAGE $name: ERROR $e"); continue }
+                println("PAGE $name: ${System.currentTimeMillis() - t0} ms; systems=" + systems.map { it.size })
+                for ((si, sys) in systems.withIndex()) println("  sys $si: " + sys.joinToString { "${it.clef}${if (it.octave8) "8" else ""}/${it.medianMidi}/${it.tokens.count { t -> t.rhythm.startsWith("note_") }}n" })
+                var score: ru.partitrainer.core.model.Score? = null
+                val voices = ArrayList<ru.partitrainer.core.model.Voice>()
+                for (v in ChoirVoice.values()) {
+                    val (tokens, shift) = ChoirAssigner.tokensFor(v, systems)
+                    if (tokens.isEmpty()) continue
+                    val parsed = TokenParser.parse(tokens, shift)
+                    val asm = ru.partitrainer.core.omr.ClaudeOmr.assemble(parsed, v.name)
+                    if (score == null) score = asm.score
+                    val notes = asm.score.voices.first().notes.map { if (v == ChoirVoice.TENOR) it.copy(midi = it.midi - shift) else it }
+                    voices += asm.score.voices.first().copy(id = v.name, notes = notes)
+                    val bad = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(parsed)
+                    println("  $v: measures=${parsed.measures.size} notes=${notes.size} key=${parsed.keyFifths} time=${parsed.timeNum}/${parsed.timeDen} badMeasures=${bad.size} first=" + notes.take(6).joinToString(" ") { nm(it.midi) })
+                }
+                if (score != null) File(dir, "${name}_kt.musicxml").writeText(ru.partitrainer.core.io.MusicXmlWriter.write(score.copy(voices = voices), voices))
+            }
         }
     }
 }

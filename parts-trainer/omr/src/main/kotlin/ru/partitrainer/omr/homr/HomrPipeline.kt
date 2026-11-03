@@ -123,21 +123,38 @@ class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0) : AutoCl
         fun staffCanvas(page: GrayImage, staff: DetectedStaff, all: List<DetectedStaff>): GrayImage {
             val u = staff.unit
             val xMin = staff.minX - 2 * u; val xMax = staff.maxX + 2 * u
-            val above = all.filter { it.minY < staff.minY }.maxOfOrNull { it.maxY.toDouble() } ?: 0.0
-            val below = all.filter { it.maxY > staff.maxY }.minOfOrNull { it.minY.toDouble() } ?: 1e12
-            val yMin = max(staff.minY - 4 * u, above); val yMax = min(staff.maxY + 4 * u, below)
-            val x0 = xMin.toInt(); val y0 = yMin.toInt(); val x1 = xMax.toInt(); val y1 = yMax.toInt()
-            val (cw, ch) = canvasSize(y1 - y0, x1 - x0)
-            val crop = page.crop(x0, y0, x1, y1)
-            val resized = ImageOps.resizeBilinear(crop, cw, ch)
+            val xm = (staff.minX + staff.maxX) / 2.0
+            val topMid = staff.topAt(xm); val botMid = staff.bottomAt(xm)
+            val above = all.filter { it.maxY < staff.minY + 1 && it !== staff && (it.minY + it.maxY) < (staff.minY + staff.maxY) }.maxOfOrNull { it.bottomAt(xm) }
+            val below = all.filter { it !== staff && (it.minY + it.maxY) > (staff.minY + staff.maxY) }.minOfOrNull { it.topAt(xm) }
+            // область по вертикали — относительно верхней линейки (так строка «выпрямляется» вдоль её изгиба)
+            val relMin = max(-4 * u, (above ?: -1e9) - topMid)
+            val relMax = min((botMid - topMid) + 4 * u, (below ?: 1e12) - topMid)
+            val regionH = relMax - relMin; val regionW = xMax - xMin
+            val (cw, ch) = canvasSize(regionH.toInt().coerceAtLeast(1), regionW.toInt().coerceAtLeast(1))
             val canvas = GrayImage(Staff2Score.WIDTH, Staff2Score.HEIGHT).also { java.util.Arrays.fill(it.data, 0xFF.toByte()) }
             val yOff = (Staff2Score.HEIGHT - ch) / 2
-            for (y in 0 until ch) {
-                val ty = y + yOff
+            val top = staff.top
+            for (cy in 0 until ch) {
+                val ty = cy + yOff
                 if (ty < 0 || ty >= Staff2Score.HEIGHT) continue
-                System.arraycopy(resized.data, y * cw, canvas.data, ty * Staff2Score.WIDTH, min(cw, Staff2Score.WIDTH))
+                val rel = relMin + (cy + 0.5) * regionH / ch
+                for (cx in 0 until min(cw, Staff2Score.WIDTH)) {
+                    val sx = xMin + (cx + 0.5) * regionW / cw
+                    val sy = (top?.at(sx) ?: topMid) + rel
+                    canvas.data[ty * Staff2Score.WIDTH + cx] = sampleBilinear(page, sx - 0.5, sy - 0.5).toByte()
+                }
             }
             return canvas
+        }
+
+        private fun sampleBilinear(img: GrayImage, x: Double, y: Double): Int {
+            if (x < 0 || y < 0 || x > img.width - 1 || y > img.height - 1) return 255
+            val x0 = x.toInt(); val y0 = y.toInt()
+            val x1 = min(x0 + 1, img.width - 1); val y1 = min(y0 + 1, img.height - 1)
+            val ax = x - x0; val ay = y - y0
+            val v = (img[x0, y0] * (1 - ax) + img[x1, y0] * ax) * (1 - ay) + (img[x0, y1] * (1 - ax) + img[x1, y1] * ax) * ay
+            return Math.round(v).toInt().coerceIn(0, 255)
         }
 
         /** (ширина, высота) изображения так, чтобы оно вписалось в 1280×256 (get_tr_omr_canvas_size). */
