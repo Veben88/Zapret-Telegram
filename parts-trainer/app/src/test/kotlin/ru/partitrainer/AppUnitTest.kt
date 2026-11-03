@@ -25,6 +25,7 @@ class AppUnitTest {
         assertNotEquals(base.cacheKey(), base.copy(rotations = listOf(90, 0)).cacheKey())
         assertNotEquals(base.cacheKey(), base.copy(pages = listOf(0)).cacheKey())
         assertNotEquals(base.cacheKey(), base.copy(engine = EngineId.ON_DEVICE).cacheKey())
+        assertNotEquals(base.cacheKey(), base.copy(twoStaffChoir = true).cacheKey())
     }
 
     @Test fun allStaffExpandsToThreeLines() {

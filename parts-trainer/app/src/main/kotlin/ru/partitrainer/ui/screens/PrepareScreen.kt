@@ -56,6 +56,7 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
     val selected = MutableStateFlow<Set<Int>>(emptySet())
     val rotations = MutableStateFlow<Map<Int, Int>>(emptyMap())
     val staff = MutableStateFlow(StaffSelection.VOCAL_TOP)
+    val twoStaff = MutableStateFlow(false)
     val settings = MutableStateFlow(Settings())
     val hasKey = MutableStateFlow(false)
     val error = MutableStateFlow<String?>(null)
@@ -115,7 +116,7 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
         (engine.availability() as? Availability.Unavailable)?.let { error.value = it.reason; return null }
         val pages = selected.value.sorted()
         if (pages.isEmpty()) { error.value = "Выберите хотя бы одну страницу"; return null }
-        val job = OmrJob(path, hash, isPdf, name, pages, pages.map { rotations.value[it] ?: 0 }, staff.value, s.engine)
+        val job = OmrJob(path, hash, isPdf, name, pages, pages.map { rotations.value[it] ?: 0 }, staff.value, s.engine, twoStaff.value)
         return OmrJob.enqueue(c.context, job).toString()
     }
 
@@ -143,6 +144,7 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
     val rotations by vm.rotations.collectAsState()
     val count by vm.pageCount.collectAsState()
     val staff by vm.staff.collectAsState()
+    val twoStaff by vm.twoStaff.collectAsState()
     val settings by vm.settings.collectAsState()
     val hasKey by vm.hasKey.collectAsState()
     val error by vm.error.collectAsState()
@@ -184,6 +186,15 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
                 }
             }
 
+            if (staff.isChoirVoice || staff == StaffSelection.CHOIR_ALL) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.choir_two_staff))
+                        Text(stringResource(R.string.choir_two_staff_hint), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(twoStaff, { vm.twoStaff.value = it })
+                }
+            }
             if (isPdf) {
                 Text(stringResource(R.string.pages_title, selected.size, count), style = MaterialTheme.typography.titleSmall)
             }

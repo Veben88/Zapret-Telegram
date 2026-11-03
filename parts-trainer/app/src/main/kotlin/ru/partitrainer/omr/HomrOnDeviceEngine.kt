@@ -95,8 +95,12 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
                             p.recognizeAll(gray, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive })
                                 .also { choirPages[page] = it }
                         }
-                        val (t, s) = ChoirAssigner.tokensFor(voice, systems)
-                        tokens += t; if (s != 0) shift = s
+                        if (request.twoStaffChoir) {
+                            tokens += ChoirAssigner.tokensForTwoStaff(voice, systems)
+                        } else {
+                            val (t, s) = ChoirAssigner.tokensFor(voice, systems)
+                            tokens += t; if (s != 0) shift = s
+                        }
                         onProgress(OmrProgress(i + 1, request.pages.size, "Страница ${page + 1} готова"))
                     }
                 } finally { pipeline?.close() }

@@ -77,4 +77,56 @@ object ChoirAssigner {
         }
         return result to shift
     }
+
+    // ---------- Хор на двух строках (SA / TB, дивизи) + фортепиано ----------
+
+    /** Фортепианная строка: много аккордов из 3+ нот или очень низкий басовый ключ. */
+    fun isPianoStaff(read: StaffRead): Boolean {
+        val groups = Divisi.groups(read.tokens).filter { g -> g.any { it.rhythm.startsWith("note_") } }
+        if (groups.isEmpty()) return false
+        val big = groups.count { g -> g.count { it.rhythm.startsWith("note_") } >= 3 }
+        if (big >= 0.15 * groups.size && big >= 2) return true
+        return read.clef == 'F' && (read.medianMidi ?: 99) <= 47
+    }
+
+    class TwoStaff(val sa: StaffRead?, val tb: StaffRead?)
+
+    /**
+     * Хоровые строки системы. В системе из 4+ строк фортепиано — две нижние (роль определяет позиция: у хора в джазовой
+     * гармонии аккорды из 3–4 нот на строку, по содержанию его не отличить от рояля). В системе из 2–3 строк — по
+     * содержанию ([isPianoStaff]). Среди хоровых: TB — последняя басовая, SA — скрипичная строка прямо над ней.
+     */
+    fun assignTwoStaff(system: List<StaffRead>): TwoStaff {
+        val choir = if (system.size >= 4) system.dropLast(2) else system.filter { !isPianoStaff(it) }
+        val tb = choir.lastOrNull { it.clef == 'F' }
+        val above = if (tb != null) choir.filter { it.indexInSystem < tb.indexInSystem && it.clef != 'F' } else choir.filter { it.clef != 'F' }
+        val sa = above.lastOrNull()
+        return TwoStaff(sa, tb)
+    }
+
+    /**
+     * Токены голоса S/A/T/B для раскладки «две хоровые строки». Системы без хоровых строк (только фортепиано)
+     * заполняются паузами на их длину, чтобы не сдвигать время.
+     */
+    fun tokensForTwoStaff(voice: ChoirVoice, systems: List<List<StaffRead>>): List<List<EncodedSymbol>> {
+        val result = ArrayList<List<EncodedSymbol>>()
+        for (sys in systems) {
+            val a = assignTwoStaff(sys)
+            val staff = when (voice) { ChoirVoice.SOPRANO, ChoirVoice.ALTO -> a.sa; else -> a.tb }
+            if (staff != null) {
+                val sp = Divisi.split(staff.tokens)
+                result += if (voice == ChoirVoice.SOPRANO || voice == ChoirVoice.TENOR) sp.upper else sp.lower
+            } else {
+                val ref = sys.firstOrNull { it.tokens.isNotEmpty() } ?: continue
+                val n = TokenParser.parse(listOf(ref.tokens)).measures.size
+                val filler = ArrayList<EncodedSymbol>()
+                repeat(n) {
+                    filler += EncodedSymbol(TokenParser.REST_MEASURE, ".", ".", ".", ".", ".")
+                    filler += EncodedSymbol("barline", ".", ".", ".", ".", ".")
+                }
+                if (n > 0) result += filler
+            }
+        }
+        return result
+    }
 }

@@ -53,7 +53,7 @@ class ClaudeVisionEngine(private val apiKeyProvider: () -> String?) : OmrEngine 
             onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: отправка…"))
             val bmp = request.provider.render(page)
             val b64 = try { encodeJpegBase64(bmp) } finally { bmp.recycle() }
-            val parsed = recognizePage(key, b64, request.staff) { msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }
+            val parsed = recognizePage(key, b64, request.staff, request.twoStaffChoir) { msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }
             pages += parsed
             onProgress(OmrProgress(i + 1, request.pages.size, "Страница ${page + 1} готова"))
         }
@@ -69,8 +69,9 @@ class ClaudeVisionEngine(private val apiKeyProvider: () -> String?) : OmrEngine 
         return first.copy(title = pages.firstNotNullOfOrNull { it.title }, tempo = pages.firstNotNullOfOrNull { it.tempo }, measures = measures)
     }
 
-    private suspend fun recognizePage(key: String, imageB64: String, staff: StaffSelection, status: (String) -> Unit): OmrParsed {
-        val prompt = "${staff.promptRu}\nВерни только JSON по схеме."
+    private suspend fun recognizePage(key: String, imageB64: String, staff: StaffSelection, twoStaff: Boolean, status: (String) -> Unit): OmrParsed {
+        val layout = if (twoStaff && staff.isChoirVoice) "\nХор записан на ДВУХ строках: сверху SA (верхний голос строки — S, нижний — A), ниже TB (верхний — T, нижний — B), ещё ниже — фортепиано. Фортепиано пропусти." else ""
+        val prompt = "${staff.promptRu}$layout\nВерни только JSON по схеме."
         var text = call(key, imageB64, prompt, null)
         var parsed = try { ClaudeOmr.parse(text) } catch (e: OmrFormatException) {
             status("ответ не разобран, повтор…")

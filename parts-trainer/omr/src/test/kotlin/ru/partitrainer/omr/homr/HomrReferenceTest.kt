@@ -302,7 +302,8 @@ class HomrReferenceTest {
                 var score: ru.partitrainer.core.model.Score? = null
                 val voices = ArrayList<ru.partitrainer.core.model.Voice>()
                 for (v in ChoirVoice.values()) {
-                    val (tokens, shift) = ChoirAssigner.tokensFor(v, systems)
+                    val two = System.getenv("HOMR_TWO") == "1"
+                    val (tokens, shift) = if (two) ChoirAssigner.tokensForTwoStaff(v, systems) to 0 else ChoirAssigner.tokensFor(v, systems)
                     if (tokens.isEmpty()) continue
                     val parsed = TokenParser.parse(tokens, shift)
                     val asm = ru.partitrainer.core.omr.ClaudeOmr.assemble(parsed, v.name)
@@ -315,6 +316,38 @@ class HomrReferenceTest {
                     println("  $v: measures=${parsed.measures.size} notes=${notes.size} key=${parsed.keyFifths} time=${parsed.timeNum}/${parsed.timeDen} badMeasures=${bad.size} first=" + notes.take(6).joinToString(" ") { nm(it.midi) })
                 }
                 if (score != null) File(dir, "${name}_kt.musicxml").writeText(ru.partitrainer.core.io.MusicXmlWriter.write(score.copy(voices = voices), voices))
+            }
+        }
+    }
+
+    @Test fun dumpStaffTokens() {
+        val dir = System.getenv("HOMR_SURVEY")?.takeIf { it.isNotBlank() }?.let(::File)
+        val page = System.getenv("HOMR_PAGE1")
+        assumeTrue(models != null && dir != null && page != null)
+        HomrPipeline(modelFiles()).use { p ->
+            val systems = p.recognizeAll(loadGray(File(dir, "$page.png")))
+            for ((si, sys) in systems.withIndex()) for (st in sys) {
+                println("TOKS sys=$si idx=${st.indexInSystem} clef=${st.clef} y=${st.staff.minY} :: " + st.tokens.joinToString(" ") { t ->
+                    val r = t.rhythm.replace("note_", "n").replace("rest_", "r").replace("barline", "|")
+                    if (t.rhythm.startsWith("note")) "$r:${t.pitch}${if (t.lift in listOf("#", "b", "N")) t.lift else ""}" else r
+                })
+            }
+        }
+    }
+
+    @Test fun textExperiment() {
+        val dir = System.getenv("HOMR_SURVEY")?.takeIf { it.isNotBlank() }?.let(::File)
+        val pages = System.getenv("HOMR_PAGES")?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+        assumeTrue(models != null && dir != null && pages.isNotEmpty() && System.getenv("HOMR_TEXT") == "1")
+        val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+        val sess = env.createSession(modelFiles().segnet.path)
+        for (name in pages) {
+            val page = ImageOps.clahe(ImageOps.resizeToHomrWidth(loadGray(File(dir, "$name.png"))))
+            val seg = Segnet(env, sess).segment(page)
+            val staves = StaffDetector.detect(seg)
+            val systems = StaffDetector.systems(staves, page)
+            for ((si, sys) in systems.withIndex()) {
+                println("TEXT $name sys $si: " + sys.mapIndexed { i, st -> "%.3f".format(StaffDetector.textBelowScore(page, seg, st, sys.getOrNull(i + 1)?.topAt(((st.minX + st.maxX) / 2.0)))) })
             }
         }
     }

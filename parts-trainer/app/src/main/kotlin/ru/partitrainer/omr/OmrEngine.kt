@@ -33,7 +33,11 @@ enum class StaffSelection(val key: String, val promptRu: String, val voiceLabel:
 /** Поставщик страниц: рендерит по одной, чтобы не держать всё в памяти. Движок обязан вызвать recycle(). */
 fun interface PageProvider { suspend fun render(page: Int): Bitmap }
 
-class OmrRequest(val pages: List<Int>, val staff: StaffSelection, val provider: PageProvider)
+/**
+ * [twoStaffChoir] — хор записан на двух строках (SA сверху, TB ниже, с дивизи) и фортепиано под ним;
+ * действует только для хоровых вариантов выбора.
+ */
+class OmrRequest(val pages: List<Int>, val staff: StaffSelection, val provider: PageProvider, val twoStaffChoir: Boolean = false)
 
 data class OmrProgress(val done: Int, val total: Int, val message: String)
 

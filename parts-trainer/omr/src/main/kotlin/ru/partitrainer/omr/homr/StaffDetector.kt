@@ -336,6 +336,26 @@ object StaffDetector {
         return if (total == 0) 0.0 else dark.toDouble() / total
     }
 
+    /**
+     * Доля «текстовых» тёмных пикселей под нотоносцем (между ним и следующей строкой системы): так находится текст песни.
+     * Учитываются только тёмные пиксели, не отнесённые сегментацией к нотам/линейкам/штилям.
+     */
+    fun textBelowScore(page: GrayImage, seg: SegMap, staff: DetectedStaff, nextTop: Double?): Double {
+        val u = staff.unit
+        val xm = (staff.minX + staff.maxX) / 2.0
+        val y0 = (staff.bottomAt(xm) + 1.3 * u).toInt()
+        var y1 = (staff.bottomAt(xm) + 5.0 * u).toInt()
+        if (nextTop != null) y1 = min(y1, (nextTop - 1.0 * u).toInt())
+        val x0 = (staff.minX + 8 * u).toInt(); val x1 = staff.maxX
+        if (y1 <= y0 || x1 <= x0) return 0.0
+        var dark = 0; var total = 0
+        for (y in max(0, y0) until min(page.height, y1)) for (x in max(0, x0) until min(page.width, x1)) {
+            total++
+            if (page[x, y] < 120 && seg.cls[y * page.width + x].toInt() == SegClass.BACKGROUND) dark++
+        }
+        return if (total == 0) 0.0 else dark.toDouble() / total
+    }
+
     /** Индекс нужного нотоносца внутри системы; null — такого нет. */
     fun indexInSystem(sel: Staff, size: Int): Int? = when (sel) {
         Staff.VOCAL_OR_TOP -> 0
