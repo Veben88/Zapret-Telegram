@@ -73,6 +73,8 @@ data class TrainerUi(
     val singResultPhrase: Int? = null,
     val headphonesNeeded: Boolean = false,
     val pausedByFocus: Boolean = false,
+    /** Где такты на страницах исходника; null — нет исходника, нет раскладки или она не совпадает с числом тактов. */
+    val layout: ru.partitrainer.core.omr.SourceLayout? = null,
 )
 
 class TrainerViewModel(private val c: AppContainer, private val projectId: Long) : ViewModel() {
@@ -98,6 +100,10 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
             _ui.value = TrainerUi(project = p, settings = s, voiceId = p.selectedVoiceId ?: p.score.voices.firstOrNull()?.id,
                 tempo = p.score.tempo ?: 85, expand = p.expandRepeats, measuresPerPhrase = s.measuresPerPhrase)
             ru.partitrainer.ui.components.SpellingState.flats = p.score.keyFifths < 0
+            val lay = c.layouts.load(projectId)?.takeIf { l ->
+                p.marks.isNotEmpty() && l.rects.size == p.marks.size && p.sourcePath?.let { java.io.File(it).isFile } == true
+            }
+            _ui.value = _ui.value.copy(layout = lay)
             recompute()
             c.settings.flow.collect { ns -> _ui.value = _ui.value.copy(settings = ns); c.synth.masterVolume = ns.volume; c.synth.sustain = ns.sustain; recompute() }
         }

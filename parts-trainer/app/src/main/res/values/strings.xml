@@ -202,4 +202,6 @@
     <string name="omr_lyrics">Распознавать слова песни</string>
     <string name="omr_lyrics_hint">Для движка «На устройстве»: слова под нотами читает Claude по вашему API-ключу. Отправляются только узкие полоски страницы с текстом, не вся страница. Слоги раскладываются по нотам — проверьте их в редакторе.</string>
     <string name="omr_lyrics_nokey">Нужен API-ключ Anthropic (раздел выше), иначе слова не будут распознаны.</string>
+    <string name="view_notes">Ноты</string>
+    <string name="view_original">Оригинал</string>
 </resources>

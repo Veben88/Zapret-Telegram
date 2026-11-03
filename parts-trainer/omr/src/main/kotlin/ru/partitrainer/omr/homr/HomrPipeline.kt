@@ -22,6 +22,8 @@ class PageTokens(
     val selected: List<DetectedStaff>,
     /** Строки текста под каждым выбранным нотоносцем (пусто, если распознавание текста выключено). */
     val lyrics: List<List<String>> = emptyList(),
+    /** Колонки тактов системы каждого выбранного нотоносца (для показа страницы исходника с указателем). */
+    val columns: List<SysColumns?> = emptyList(),
 )
 
 /**
@@ -51,7 +53,7 @@ class HomrPipeline(
     }
 
     /** Результат поиска нотоносцев: выровненная страница, нотоносцы и системы. */
-    class Located(val page: GrayImage, val staves: List<DetectedStaff>, val systems: List<List<DetectedStaff>>)
+    class Located(val page: GrayImage, val staves: List<DetectedStaff>, val systems: List<List<DetectedStaff>>, val angle: Double = 0.0)
 
     /**
      * Находит нотоносцы. Быстрый путь — без нейросети (выравнивание по тёмным пикселям + поиск длинных тонких линий);
@@ -66,10 +68,11 @@ class HomrPipeline(
             val located = timed("classic") {
                 val dark = ClassicStaffMask.dark(page)
                 val slope = ClassicStaffMask.estimateSlope(dark, page.width, page.height)
-                val p = if (Math.abs(slope) > 0.005) ImageOps.rotate(page, Math.atan(slope)) else page
+                val angle = if (Math.abs(slope) > 0.005) Math.atan(slope) else 0.0
+                val p = if (angle != 0.0) ImageOps.rotate(page, angle) else page
                 val d = if (p === page) dark else ClassicStaffMask.dark(p)
                 val staves = StaffDetector.detect(ClassicStaffMask.mask(p, d))
-                if (staves.isEmpty()) null else Located(p, staves, StaffDetector.systems(staves, p))
+                if (staves.isEmpty()) null else Located(p, staves, StaffDetector.systems(staves, p), angle)
             }
             if (located != null) { usedClassic = true; return located }
         }
@@ -79,9 +82,10 @@ class HomrPipeline(
         fun segment(img: GrayImage) = timed("segnet") { segnet.segment(img) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") } }
         var seg = segment(page)
         val slope = timed("deskew") { StaffDetector.estimateSlope(seg) }
-        if (Math.abs(slope) > 0.005) timed("deskew") { page = ImageOps.rotate(page, Math.atan(slope)); seg = seg.rotated(Math.atan(slope)) }
+        val angle = if (Math.abs(slope) > 0.005) Math.atan(slope) else 0.0
+        if (angle != 0.0) timed("deskew") { page = ImageOps.rotate(page, angle); seg = seg.rotated(angle) }
         val staves = timed("detect") { StaffDetector.detect(seg) }
-        return Located(page, staves, if (staves.isEmpty()) emptyList() else StaffDetector.systems(staves, page))
+        return Located(page, staves, if (staves.isEmpty()) emptyList() else StaffDetector.systems(staves, page), angle)
     }
 
     /** Шаги: сегментация (0..1), затем по одному на нотоносец. */
@@ -107,7 +111,11 @@ class HomrPipeline(
             chosen.map { st -> if (isCancelled()) throw InterruptedException("Отменено"); Lyrics.readLines(rec, page, st, nextStaffOf(st, staves)) }
         } ?: emptyList()
         onProgress(chosen.size, chosen.size, "Страница готова")
-        return PageTokens(staves.size, result, staves, chosen, lyrics)
+        val columns = chosen.map { st ->
+            val sys = systems.firstOrNull { st in it } ?: listOf(st)
+            Barlines.columns(page, st, sys, loc.angle)
+        }
+        return PageTokens(staves.size, result, staves, chosen, lyrics, columns)
     }
 
     /**
@@ -145,7 +153,7 @@ class HomrPipeline(
                 val octScore = StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
                 val oct = octScore > OCTAVE_MARK_THRESHOLD
                 val lines = text?.let { rec -> Lyrics.readLines(rec, page, st, nextStaffOf(st, staves)) } ?: emptyList()
-                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore, lines)
+                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore, lines, Barlines.columns(page, st, sys, loc.angle))
             }
             out += reads
         }

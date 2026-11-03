@@ -40,7 +40,10 @@ import ru.partitrainer.core.music.Phrase
 import ru.partitrainer.core.music.Ranges
 import ru.partitrainer.ui.appViewModel
 import ru.partitrainer.ui.components.LocalNotation
+import ru.partitrainer.ui.components.OriginalView
 import ru.partitrainer.ui.components.ScoreView
+import ru.partitrainer.core.edit.MeasureLayout
+import androidx.compose.runtime.saveable.rememberSaveable
 import ru.partitrainer.ui.components.SpellingState
 import ru.partitrainer.ui.components.NoteChip
 import ru.partitrainer.ui.components.PianoKeyboard
@@ -101,11 +104,33 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     val keyboard: @Composable () -> Unit = {
         PianoKeyboard(kbLow, kbHigh, notation, targets, pos.activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::tapKey, Modifier.padding(vertical = 6.dp))
     }
-    // Нотный стан с бегущей кареткой; касание такта — играть оттуда
+    // Такты напечатанных нот: начала в долях и текущий такт под кареткой (для режима «Оригинал»)
+    val measureStarts = remember(d.spec) { d.spec?.let { sp -> MeasureLayout.build(sp.notes, sp.marks, sp.beatsPerMeasure).map { it.start } }.orEmpty() }
+    val curMeasure = if (!active) -1 else {
+        val ob = d.playMap.originalBeat(pos.beat)
+        d.playMap.originalMeasure(pos.beat).takeIf { it >= 0 && d.playMap.expanded } ?: measureStarts.indexOfLast { it <= ob + 1e-9 }
+    }
+    var originalMode by rememberSaveable { mutableStateOf(false) }
+    val layout = ui.layout
+    val project = ui.project
+    // Нотный стан с бегущей кареткой (или страницы исходника с подсветкой такта); касание такта — играть оттуда
     val scoreView: @Composable (Modifier) -> Unit = { m ->
         val spec = d.spec
-        if (spec != null) ScoreView(spec, d.playMap, pos.beat, showCaret = active, onSeek = { ob -> vm.playFrom(d.playMap.expandedBeat(ob), false) }, modifier = m)
-        else Box(m) {}
+        Column(m) {
+            if (layout != null) Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(!originalMode, { originalMode = false }, label = { Text(stringResource(R.string.view_notes)) }, modifier = Modifier.heightIn(min = 48.dp))
+                FilterChip(originalMode, { originalMode = true }, label = { Text(stringResource(R.string.view_original)) }, modifier = Modifier.heightIn(min = 48.dp))
+            }
+            if (originalMode && layout != null && project?.sourcePath != null) {
+                OriginalView(
+                    project.sourcePath, project.sourceType == "PDF", layout, curMeasure,
+                    onSeekMeasure = { i -> measureStarts.getOrNull(i)?.let { st -> vm.playFrom(d.playMap.expandedBeat(st), false) } },
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            } else if (spec != null) {
+                ScoreView(spec, d.playMap, pos.beat, showCaret = active, onSeek = { ob -> vm.playFrom(d.playMap.expandedBeat(ob), false) }, modifier = Modifier.weight(1f).fillMaxWidth())
+            }
+        }
     }
 
     CompositionLocalProvider(LocalNotation provides notation) {

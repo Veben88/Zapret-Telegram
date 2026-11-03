@@ -66,7 +66,7 @@ class HomeViewModel(private val c: AppContainer) : ViewModel() {
 
     fun createManual() = viewModelScope.launch { nav.value = Nav.Review(c.importer.createManual()) }
     fun rename(id: Long, title: String) = viewModelScope.launch { c.projects.rename(id, title) }
-    fun delete(id: Long) = viewModelScope.launch { c.projects.delete(id) }
+    fun delete(id: Long) = viewModelScope.launch { c.projects.delete(id); c.layouts.delete(id) }
 
     fun export(id: Long, format: ExportFormat, context: android.content.Context) = viewModelScope.launch {
         c.projects.load(id)?.let { Exporter.share(context, it, it.selectedVoiceId, format) }

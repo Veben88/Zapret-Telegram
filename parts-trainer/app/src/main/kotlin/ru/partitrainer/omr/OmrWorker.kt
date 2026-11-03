@@ -25,7 +25,7 @@ import ru.partitrainer.data.Project
 import java.io.File
 
 @Serializable
-data class OmrResultDto(val score: Score, val marks: List<MeasureMark>, val uncertain: List<Int>)
+data class OmrResultDto(val score: Score, val marks: List<MeasureMark>, val uncertain: List<Int>, val layout: ru.partitrainer.core.omr.SourceLayout? = null)
 
 /** Параметры задания; передаются через Data WorkManager (без больших объектов). */
 data class OmrJob(
@@ -112,6 +112,7 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
             val totalUnits = job.pages.size * staffs.size
             val voices = ArrayList<ru.partitrainer.core.model.Voice>()
             var base: ClaudeOmr.Assembled? = null
+            var layout: ru.partitrainer.core.omr.SourceLayout? = null
             try {
                 for ((si, staff) in staffs.withIndex()) {
                     val parsed = engine.recognize(OmrRequest(job.pages, staff, { p -> renderer.render(p, rotByPage[p] ?: 0) }, job.twoStaffChoir, job.accurate, job.lyrics)) { pr ->
@@ -120,7 +121,10 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
                         publish(done, totalUnits, pr.message)
                     }
                     val asm = ClaudeOmr.assemble(parsed, staff.voiceLabel)
-                    if (base == null) base = asm
+                    if (base == null) {
+                        base = asm
+                        layout = parsed.layout?.let { l -> l.copy(pages = l.pages.map { p -> p.copy(rotation = rotByPage[p.index] ?: 0) }) }
+                    }
                     voices += asm.score.voices.single().copy(id = "omr_${staff.key}", kind = staff.kind)
                 }
             } catch (e: OmrException) {
@@ -128,7 +132,7 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
             }
             val b = base!!
             val score = b.score.copy(title = b.score.title ?: job.title, voices = voices)
-            val dto = OmrResultDto(score, b.marks, b.uncertainMeasures)
+            val dto = OmrResultDto(score, b.marks, b.uncertainMeasures, layout)
             c.projects.putCache(job.cacheKey(), json.encodeToString(OmrResultDto.serializer(), dto))
             return Result.success(workDataOf(OmrJob.KEY_PROJECT to saveProject(job, dto)))
         }
@@ -155,7 +159,7 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
             dto.uncertain.toSet(), false, dto.score.voices.firstOrNull()?.id, false, job.filePath,
             job.pages.firstOrNull() ?: 0, job.rotations.firstOrNull() ?: 0, false,
         )
-        return c.projects.saveNew(p, job.hash)
+        return c.projects.saveNew(p, job.hash).also { id -> dto.layout?.let { c.layouts.save(id, it) } }
     }
 
     private companion object {

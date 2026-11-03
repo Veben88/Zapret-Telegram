@@ -17,6 +17,8 @@ class StaffRead(
     val octaveScore: Double = 0.0,
     /** Строки текста, распознанные под нотоносцем (пусто, если распознавание текста выключено). */
     val lyricLines: List<String> = emptyList(),
+    /** Колонки тактов системы по тактовым чертам этого нотоносца. */
+    val columns: SysColumns? = null,
 )
 
 /**
@@ -60,7 +62,7 @@ object ChoirAssigner {
         tokensWithLyrics(voice, systems).let { (r, shift) -> r.map { it.tokens } to shift }
 
     /** Токены нотоносца и строки текста под ним (пусто для вставленных пауз). */
-    class StaffText(val tokens: List<EncodedSymbol>, val lyricLines: List<String>)
+    class StaffText(val tokens: List<EncodedSymbol>, val lyricLines: List<String>, val columns: SysColumns? = null)
 
     /** То же, что [tokensFor], но вместе со строками текста под нотоносцами голоса. */
     fun tokensWithLyrics(voice: ChoirVoice, systems: List<List<StaffRead>>): Pair<List<StaffText>, Int> {
@@ -70,7 +72,7 @@ object ChoirAssigner {
             val a = assign(sys)
             val mine = a[voice]
             if (mine != null) {
-                result += StaffText(mine.tokens, mine.lyricLines)
+                result += StaffText(mine.tokens, mine.lyricLines, mine.columns)
                 if (transposeFor(voice, mine) != 0) shift = transposeFor(voice, mine)
             } else {
                 val ref = sys.firstOrNull { it.tokens.isNotEmpty() } ?: continue
@@ -82,7 +84,7 @@ object ChoirAssigner {
                         filler += EncodedSymbol(TokenParser.REST_MEASURE, ".", ".", ".", ".", ".")
                         filler += EncodedSymbol("barline", ".", ".", ".", ".", ".")
                     }
-                    result += StaffText(filler, emptyList())
+                    result += StaffText(filler, emptyList(), ref.columns)
                 }
             }
         }
@@ -136,7 +138,7 @@ object ChoirAssigner {
                 val upper = voice == ChoirVoice.SOPRANO || voice == ChoirVoice.TENOR
                 val lines = staff.lyricLines
                 val mine = if (upper) lines.take(1) else (lines.getOrNull(1) ?: lines.getOrNull(0))?.let { listOf(it) }.orEmpty()
-                result += StaffText(if (upper) sp.upper else sp.lower, mine)
+                result += StaffText(if (upper) sp.upper else sp.lower, mine, staff.columns)
             } else {
                 val ref = sys.firstOrNull { it.tokens.isNotEmpty() } ?: continue
                 val n = TokenParser.parse(listOf(ref.tokens)).measures.size
@@ -145,7 +147,7 @@ object ChoirAssigner {
                     filler += EncodedSymbol(TokenParser.REST_MEASURE, ".", ".", ".", ".", ".")
                     filler += EncodedSymbol("barline", ".", ".", ".", ".", ".")
                 }
-                if (n > 0) result += StaffText(filler, emptyList())
+                if (n > 0) result += StaffText(filler, emptyList(), ref.columns)
             }
         }
         return result

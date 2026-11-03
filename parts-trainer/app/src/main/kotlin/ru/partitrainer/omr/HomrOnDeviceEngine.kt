@@ -16,6 +16,9 @@ import ru.partitrainer.omr.homr.StaffRead
 import ru.partitrainer.omr.homr.GrayImage
 import ru.partitrainer.omr.homr.HomrPipeline
 import ru.partitrainer.omr.homr.StaffDetector
+import ru.partitrainer.omr.homr.LayoutBuilder
+import ru.partitrainer.omr.homr.SysColumns
+import ru.partitrainer.core.omr.PageRef
 import ru.partitrainer.omr.homr.TextRecognizer
 import ru.partitrainer.omr.homr.Lyrics
 import ru.partitrainer.omr.homr.TokenParser
@@ -49,6 +52,8 @@ class HomrOnDeviceEngine(
         val ctx = currentCoroutineContext()
         val tokens = ArrayList<List<EncodedSymbol>>()
         val lines = ArrayList<List<String>>()
+        val cols = ArrayList<SysColumns?>()
+        val slots = ArrayList<Int>()
         val text = if (request.lyrics) textFactory?.invoke() else null
         try {
             withContext(Dispatchers.Default) {
@@ -65,6 +70,8 @@ class HomrOnDeviceEngine(
                         )
                         tokens += r.staffs
                         lines += r.staffs.indices.map { r.lyrics.getOrNull(it).orEmpty() }
+                        cols += r.staffs.indices.map { r.columns.getOrNull(it) }
+                        slots += r.staffs.map { i }
                         onProgress(OmrProgress(i + 1, request.pages.size, "Страница ${page + 1} готова"))
                     }
                 }
@@ -80,6 +87,7 @@ class HomrOnDeviceEngine(
             throw OmrException("Нотоносцы на страницах не найдены. Проверьте, что страница ровная и чёткая, или введите ноты вручную.", offerManual = true)
         }
         return TokenParser.parse(tokens, syllables = if (text != null) Lyrics.forStaffs(tokens, lines) else emptyList())
+            .copy(layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) }))
     }
 
     private suspend fun recognizeChoir(files: ru.partitrainer.omr.homr.HomrModelFiles, request: OmrRequest, onProgress: (OmrProgress) -> Unit): OmrParsed {
@@ -90,6 +98,8 @@ class HomrOnDeviceEngine(
         val ctx = currentCoroutineContext()
         val tokens = ArrayList<List<EncodedSymbol>>()
         val lines = ArrayList<List<String>>()
+        val cols = ArrayList<SysColumns?>()
+        val slots = ArrayList<Int>()
         val text = if (request.lyrics) textFactory?.invoke() else null
         var shift = 0
         try {
@@ -108,10 +118,10 @@ class HomrOnDeviceEngine(
                         }
                         if (request.twoStaffChoir) {
                             val t = ChoirAssigner.tokensWithLyricsTwoStaff(voice, systems)
-                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }
+                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; cols += t.map { it.columns }; slots += t.map { i }
                         } else {
                             val (t, s) = ChoirAssigner.tokensWithLyrics(voice, systems)
-                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; if (s != 0) shift = s
+                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; cols += t.map { it.columns }; slots += t.map { i }; if (s != 0) shift = s
                         }
                         onProgress(OmrProgress(i + 1, request.pages.size, "Страница ${page + 1} готова"))
                     }
@@ -128,6 +138,7 @@ class HomrOnDeviceEngine(
             throw OmrException("Нотоносцы на страницах не найдены. Проверьте, что страница ровная и чёткая, или введите ноты вручную.", offerManual = true)
         }
         return TokenParser.parse(tokens, shift, if (text != null) Lyrics.forStaffs(tokens, lines) else emptyList())
+            .copy(layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) }))
     }
 
     private fun toGray(bmp: Bitmap): GrayImage {

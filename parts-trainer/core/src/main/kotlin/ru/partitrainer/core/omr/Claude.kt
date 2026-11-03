@@ -41,6 +41,8 @@ data class OmrMeasure(
 data class OmrParsed(
     val title: String?, val keyFifths: Int, val timeNum: Int, val timeDen: Int, val tempo: Int?,
     val measures: List<OmrMeasure>,
+    /** Где такты находятся на страницах исходника (только движок «На устройстве»). */
+    val layout: SourceLayout? = null,
 )
 
 class OmrFormatException(message: String) : Exception(message)
