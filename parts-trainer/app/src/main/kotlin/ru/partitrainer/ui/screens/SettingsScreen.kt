@@ -1,5 +1,8 @@
 package ru.partitrainer.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -12,6 +15,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
@@ -109,6 +115,23 @@ fun SettingsScreen(onBack: () -> Unit) {
 
             SectionTitle(R.string.set_theme)
             Choice(listOf(ThemeMode.SYSTEM to R.string.theme_system, ThemeMode.LIGHT to R.string.theme_light, ThemeMode.DARK to R.string.theme_dark), s.theme) { v -> vm.update { it.copy(theme = v) } }
+
+            SectionTitle(R.string.set_caret_color)
+            Text(stringResource(R.string.caret_color_hint), style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                for (c in ru.partitrainer.data.CaretColor.entries) {
+                    val col = ru.partitrainer.ui.components.caretColorOf(c, MaterialTheme.colorScheme.primary)
+                    val selected = c == s.caretColor
+                    Box(
+                        Modifier.size(48.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(col)
+                            .border(if (selected) 4.dp else 1.dp, if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline, androidx.compose.foundation.shape.CircleShape)
+                            .selectable(selected = selected, onClick = { vm.update { it.copy(caretColor = c) } }, role = Role.RadioButton)
+                            .semantics { contentDescription = c.name },
+                    )
+                }
+            }
 
             SectionTitle(R.string.set_tolerance)
             Text(stringResource(R.string.tolerance_value, s.toleranceCents))

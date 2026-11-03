@@ -62,11 +62,12 @@ private class Sys(val line: SystemPacker.Line, val top: Float, val height: Float
 @Composable
 fun ScoreView(
     spec: ScoreSpec, beat: () -> Double, curMeasure: Int, playMap: PlayMap, showCaret: Boolean, onSeek: (Double) -> Unit, modifier: Modifier = Modifier,
+    caretColor: Color = MaterialTheme.colorScheme.primary,
 ) {
     val density = LocalDensity.current
     val tm = rememberTextMeasurer()
     val ink = MaterialTheme.colorScheme.onSurface
-    val accent = MaterialTheme.colorScheme.primary
+    val accent = caretColor
     val hasClefGlyph = remember { android.graphics.Paint().hasGlyph("𝄞") && android.graphics.Paint().hasGlyph("𝄢") }
     val measures = remember(spec) { MeasureLayout.build(spec.notes, spec.marks, spec.beatsPerMeasure) }
     val minWidths = remember(measures) { measures.map { m -> m.cells.size to m.length } }

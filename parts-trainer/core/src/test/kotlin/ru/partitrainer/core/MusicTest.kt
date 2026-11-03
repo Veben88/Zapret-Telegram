@@ -91,8 +91,22 @@ class MusicTest {
         assertEquals(2, PhraseSplitter.split(notes, 4.0, 2).size)   // по 2 такта
         assertEquals(4, PhraseSplitter.split(notes, 4.0, 1).size)
         assertEquals(1, PhraseSplitter.split(notes, 4.0, 4).size)
-        val byLines = PhraseSplitter.split(notes, 4.0, 2, setOf(3, 10))
+        val byLines = PhraseSplitter.split(notes, 4.0, 0, setOf(3, 10))      // 0 — авто: только строки текста
         assertEquals(listOf(0, 3, 10), byLines.map { it.from })
+        assertEquals(2, PhraseSplitter.split(notes, 4.0, 0).size)            // авто без пауз и строк — по 2 такта
+    }
+
+    @Test fun phraseLengthIsCappedEvenWithRestsAndLines() {
+        // 30 тактов подряд, паузы и строки текста есть только в начале — раньше фраза получалась в 30 тактов
+        val notes = (0 until 120).map { Note(60, it.toDouble(), 1.0, it / 4 + 1) }
+        assertEquals(30, PhraseSplitter.split(notes, 4.0, 1).size)
+        val capped = PhraseSplitter.split(notes, 4.0, 4, setOf(10))        // разрыв по строке текста + ограничение 4 такта
+        assertTrue(capped.all { p -> (notes[p.to - 1].startBeat / 4).toInt() - (notes[p.from].startBeat / 4).toInt() < 4 })
+        assertTrue(capped.any { it.from == 10 })
+        // «авто» оставляет длинную фразу как есть, если пауз и строк нет
+        val withRest = notes.take(8) + notes.drop(10).take(100)
+        val auto = PhraseSplitter.split(withRest, 4.0, 0)
+        assertEquals(2, auto.size)                                          // первая часть до паузы и остальные 100 нот без деления
     }
 }
 

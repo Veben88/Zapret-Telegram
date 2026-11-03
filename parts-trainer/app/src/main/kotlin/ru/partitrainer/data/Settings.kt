@@ -17,6 +17,9 @@ enum class EngineId { ON_DEVICE, CLAUDE_VISION }
 enum class Timbre { PIANO, AAH }
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
+/** Цвет каретки и подсветки такта. ACCENT — цвет темы приложения. */
+enum class CaretColor { ACCENT, GREEN, RED, ORANGE, BLUE, PURPLE, YELLOW }
+
 data class Settings(
     val engine: EngineId = EngineId.ON_DEVICE,
     val notation: Notation = Notation.SOLFEGE,
@@ -36,6 +39,7 @@ data class Settings(
     val sustain: Float = 0.5f,
     /** Распознавать слова под нотами (текст) при чтении нот на устройстве. */
     val omrLyrics: Boolean = false,
+    val caretColor: CaretColor = CaretColor.ACCENT,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -57,6 +61,7 @@ class SettingsRepository(private val context: Context) {
         val accurate = booleanPreferencesKey("omr_accurate")
         val sustain = floatPreferencesKey("sustain")
         val lyrics = booleanPreferencesKey("omr_lyrics")
+        val caret = stringPreferencesKey("caret_color")
     }
 
     val flow: Flow<Settings> = context.dataStore.data.map { snapshot(it) }
@@ -69,7 +74,7 @@ class SettingsRepository(private val context: Context) {
             p[K.theme] = n.theme.name; p[K.tolerance] = n.toleranceCents; p[K.octave] = n.matchOctave
             p[K.volume] = n.volume; p[K.other] = n.otherVoicesVolume; p[K.playOthers] = n.playOthers
             p[K.countIn] = n.countIn; p[K.phrase] = n.measuresPerPhrase; p[K.warned] = n.claudeWarningAccepted; p[K.accurate] = n.omrAccurate
-            p[K.sustain] = n.sustain; p[K.lyrics] = n.omrLyrics
+            p[K.sustain] = n.sustain; p[K.lyrics] = n.omrLyrics; p[K.caret] = n.caretColor.name
         }
     }
 
@@ -91,6 +96,7 @@ class SettingsRepository(private val context: Context) {
             omrAccurate = p[K.accurate] ?: d.omrAccurate,
             sustain = (p[K.sustain] ?: d.sustain).coerceIn(0f, 1f),
             omrLyrics = p[K.lyrics] ?: d.omrLyrics,
+            caretColor = p[K.caret]?.let { runCatching { CaretColor.valueOf(it) }.getOrNull() } ?: d.caretColor,
         )
     }
 }

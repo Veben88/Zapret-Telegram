@@ -10,7 +10,8 @@ object PhraseSplitter {
      * Делит ноты на фразы:
      * 1) по паузам длиннее одной доли;
      * 2) по заданным разрывам [lineBreaks] (индексы нот — начала строк текста);
-     * 3) если во всей партии нет ни пауз, ни строк текста, — каждые [measuresPerPhrase] тактов.
+     * 3) если [measuresPerPhrase] > 0 — фраза не длиннее этого числа тактов (считая от её начала), даже если пауз и строк текста нет;
+     *    0 — «авто»: только по паузам и строкам, а если их во всей партии нет — каждые 2 такта.
      */
     fun split(
         notes: List<Note>,
@@ -19,7 +20,8 @@ object PhraseSplitter {
         lineBreaks: Set<Int> = emptySet(),
     ): List<Phrase> {
         if (notes.isEmpty()) return emptyList()
-        val limit = measuresPerPhrase.coerceAtLeast(1) * beatsPerMeasure
+        val cap = measuresPerPhrase.coerceAtLeast(0)
+        val limit = (if (cap > 0) cap else 2) * beatsPerMeasure
         val result = ArrayList<Phrase>()
         var from = 0
         fun close(toExclusive: Int) {
@@ -30,13 +32,15 @@ object PhraseSplitter {
         }
         val hasNatural = lineBreaks.isNotEmpty() ||
             (1 until notes.size).any { notes[it].startBeat - notes[it - 1].endBeat > 1.0 + 1e-9 }
+        fun measureOf(beat: Double) = Math.floor(beat / beatsPerMeasure + 1e-9).toInt()
         fun cell(beat: Double) = Math.floor(beat / limit + 1e-9).toInt()
         for (i in 1 until notes.size) {
             val gap = notes[i].startBeat - notes[i - 1].endBeat
             val byRest = gap > 1.0 + 1e-9
             val byLine = i in lineBreaks
-            val byGrid = !hasNatural && cell(notes[i].startBeat) > cell(notes[from].startBeat)
-            if (byRest || byLine || byGrid) close(i)
+            val byCap = cap > 0 && measureOf(notes[i].startBeat) - measureOf(notes[from].startBeat) >= cap
+            val byGrid = cap == 0 && !hasNatural && cell(notes[i].startBeat) > cell(notes[from].startBeat)
+            if (byRest || byLine || byCap || byGrid) close(i)
         }
         close(notes.size)
         return result

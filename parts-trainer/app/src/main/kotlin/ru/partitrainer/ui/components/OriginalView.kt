@@ -40,11 +40,12 @@ import java.io.File
 @Composable
 fun OriginalView(
     path: String, isPdf: Boolean, layout: SourceLayout, curMeasure: Int, onSeekMeasure: (Int) -> Unit, modifier: Modifier = Modifier,
+    caretColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
 ) {
     val renderer = remember(path) { PageRenderer(File(path), isPdf) }
     DisposableEffect(renderer) { onDispose { runCatching { renderer.close() } } }
     val listState = rememberLazyListState()
-    val accent = MaterialTheme.colorScheme.primary
+    val accent = caretColor
     val curSlot = layout.rects.getOrNull(curMeasure)?.page ?: -1
     LaunchedEffect(curSlot) { if (curSlot >= 0) listState.animateScrollToItem(curSlot) }
 

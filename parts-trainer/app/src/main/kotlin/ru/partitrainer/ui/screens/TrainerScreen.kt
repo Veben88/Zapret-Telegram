@@ -41,6 +41,7 @@ import ru.partitrainer.core.music.Ranges
 import ru.partitrainer.ui.appViewModel
 import ru.partitrainer.ui.components.LocalNotation
 import ru.partitrainer.ui.components.OriginalView
+import ru.partitrainer.ui.components.caretColorOf
 import ru.partitrainer.ui.components.ScoreView
 import ru.partitrainer.core.edit.MeasureLayout
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -111,6 +112,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     var originalMode by rememberSaveable { mutableStateOf(false) }
     val layout = ui.layout
     val project = ui.project
+    val caretColor = caretColorOf(ui.settings.caretColor, MaterialTheme.colorScheme.primary)
     // Нотный стан с бегущей кареткой (или страницы исходника с подсветкой такта); касание такта — играть оттуда
     val scoreView: @Composable (Modifier) -> Unit = { m ->
         val spec = d.spec
@@ -123,10 +125,10 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
                 OriginalView(
                     project.sourcePath, project.sourceType == "PDF", layout, curMeasure,
                     onSeekMeasure = { i -> measureStarts.getOrNull(i)?.let { st -> vm.playFrom(d.playMap.expandedBeat(st), false) } },
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier = Modifier.weight(1f).fillMaxWidth(), caretColor = caretColor,
                 )
             } else if (spec != null) {
-                ScoreView(spec, { beatState.value }, curMeasure, d.playMap, showCaret = active, onSeek = { ob -> vm.playFrom(d.playMap.expandedBeat(ob), false) }, modifier = Modifier.weight(1f).fillMaxWidth())
+                ScoreView(spec, { beatState.value }, curMeasure, d.playMap, showCaret = active, onSeek = { ob -> vm.playFrom(d.playMap.expandedBeat(ob), false) }, modifier = Modifier.weight(1f).fillMaxWidth(), caretColor = caretColor)
             }
         }
     }
@@ -286,7 +288,7 @@ private fun Controls(vm: TrainerViewModel, ui: TrainerUi, d: Derived, onMic: () 
             // Размер фразы
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(stringResource(R.string.phrase_size), Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                for (m in listOf(1, 2, 4)) FilterChip(ui.measuresPerPhrase == m, { vm.setPhraseSize(m) }, label = { Text(stringResource(R.string.n_measures, m)) }, modifier = Modifier.heightIn(min = 48.dp))
+                for (m in listOf(1, 2, 4, 8, 0)) FilterChip(ui.measuresPerPhrase == m, { vm.setPhraseSize(m) }, label = { Text(if (m == 0) stringResource(R.string.phrase_auto) else stringResource(R.string.n_measures, m)) }, modifier = Modifier.heightIn(min = 48.dp))
             }
             // Повторы
             if (d.hasStructure) {

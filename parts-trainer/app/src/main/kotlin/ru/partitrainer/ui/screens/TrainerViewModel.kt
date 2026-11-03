@@ -181,7 +181,7 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
     fun setTempo(v: Int) { _ui.value = _ui.value.copy(tempo = v.coerceIn(40, 200)) }
     fun resetTempo() { _ui.value = _ui.value.copy(tempo = _ui.value.project?.score?.tempo ?: 85) }
     fun setExpand(v: Boolean) { change { it.copy(expand = v, selectedNote = null) }; persist() }
-    fun setPhraseSize(m: Int) = change { it.copy(measuresPerPhrase = m) }
+    fun setPhraseSize(m: Int) { change { it.copy(measuresPerPhrase = m) }; updateSettings { it.copy(measuresPerPhrase = m) } }
 
     fun updateSettings(f: (Settings) -> Settings) = viewModelScope.launch { c.settings.update(f) }
 
