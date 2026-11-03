@@ -27,20 +27,26 @@ sealed interface ModelState {
 }
 
 /**
- * Модели homr (ONNX, ≈157 МБ) скачиваются по запросу из релиза проекта homr и проверяются по SHA-256.
- * В APK их нет. Скачивание идёт напрямую с GitHub, без нашего сервера; передаются только запросы файлов.
+ * Модели homr (ONNX). Сегментатор и декодер (≈91 МБ) скачиваются по запросу из релиза проекта homr и проверяются
+ * по SHA-256. Энкодер — наша int8-версия (17 МБ, квантование весов MatMul, результат распознавания тот же,
+ * работает быстрее) — лежит в APK (assets) и при первом обращении копируется в память приложения. Скачивание идёт напрямую с GitHub, без нашего сервера; передаются только запросы файлов.
  */
 class HomrModelManager(context: Context) {
+    private val appContext = context.applicationContext
     private data class Spec(val zip: String, val onnx: String, val sha256: String, val zipBytes: Long)
+
+    private companion object {
+        const val ENCODER_SHA256 = "df016c4ee93f69a168d2368b14703ca03ea507514b50d1d78369acc07d9761e3"
+        const val ENCODER_BYTES = 17_142_614L
+    }
 
     private val specs = listOf(
         Spec("segnet_308-3296ccd40960f90ca6ab9c035cca945675d30a0f.zip", "segnet_308-3296ccd40960f90ca6ab9c035cca945675d30a0f.onnx",
             "6ed36640db4ef5d223098b6d5efe4eda97c66b24a2c72faab8a018c749003a8d", 53_214_519),
-        Spec("encoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.zip", "encoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.onnx",
-            "ee5767286c60dc3d567fe72b6560e7285261ede1535b4215153c199ab3057559", 48_281_161),
         Spec("decoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.zip", "decoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.onnx",
             "99a6ac39770616bc1a20d6c409bb85fbbe21ba47f972984f9ef834fb5741b96f", 37_824_782),
     )
+    private val encoderFile get() = File(dir, "encoder-int8.onnx")
     private val baseUrl = "https://github.com/liebharc/homr/releases/download/onnx_checkpoints/"
     private val dir = File(context.filesDir, "models/homr").apply { mkdirs() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -54,8 +60,27 @@ class HomrModelManager(context: Context) {
     private fun fileOf(s: Spec) = File(dir, s.onnx)
     private fun installed() = specs.all { fileOf(it).isFile }
 
-    fun files(): HomrModelFiles? =
-        if (installed()) HomrModelFiles(fileOf(specs[0]), fileOf(specs[1]), fileOf(specs[2])) else null
+    fun files(): HomrModelFiles? {
+        if (!installed()) return null
+        dir.listFiles()?.filter { it.name.startsWith("encoder_") }?.forEach { it.delete() } // старый float-энкодер
+        return try { HomrModelFiles(fileOf(specs[0]), ensureEncoder(), fileOf(specs[1])) } catch (e: Exception) { null }
+    }
+
+    /** Копирует энкодер из assets и проверяет SHA-256 (повторно — только если файла нет или он повреждён). */
+    @Synchronized private fun ensureEncoder(): File {
+        val f = encoderFile
+        if (f.isFile && f.length() == ENCODER_BYTES) return f
+        val tmp = File(dir, "encoder-int8.onnx.part")
+        val md = MessageDigest.getInstance("SHA-256")
+        appContext.assets.open("homr/encoder-int8.onnx").use { input -> tmp.outputStream().use { out ->
+            val buf = ByteArray(64 * 1024)
+            while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n); out.write(buf, 0, n) }
+        } }
+        val hash = md.digest().joinToString("") { "%02x".format(it) }
+        if (hash != ENCODER_SHA256) { tmp.delete(); throw IllegalStateException("Встроенный энкодер повреждён") }
+        if (!tmp.renameTo(f)) throw IllegalStateException("Не удалось сохранить энкодер")
+        return f
+    }
 
     fun startDownload() {
         if (job?.isActive == true || installed()) { if (installed()) _state.value = ModelState.Ready; return }

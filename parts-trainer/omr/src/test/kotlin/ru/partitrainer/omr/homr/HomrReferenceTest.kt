@@ -439,7 +439,7 @@ class HomrReferenceTest {
                     val sb = StringBuilder("FULL $name: fast ${tf} ms, accurate ${ta} ms |")
                     for (v in ChoirVoice.values()) {
                         fun notes(sys: List<List<StaffRead>>): List<Pair<Int, Double>> {
-                            val (tokens, shift) = if (mode == "two") ChoirAssigner.tokensForTwoStaff(v, sys) to 0 else ChoirAssigner.tokensFor(v, sys)
+                            val (tokens, shift) = if (mode == "two") Pair(ChoirAssigner.tokensForTwoStaff(v, sys), 0) else ChoirAssigner.tokensFor(v, sys)
                             return ru.partitrainer.core.omr.ClaudeOmr.assemble(TokenParser.parse(tokens, shift)).score.voices.first().notes.map { it.midi to it.beats }
                         }
                         val a = notes(acc); val f = notes(fast)
@@ -481,5 +481,40 @@ class HomrReferenceTest {
         fun q(l: List<Double>, p: Double) = l.sorted().let { it[((it.size - 1) * p).toInt()] }
         println("CAL tenor n=${tenor.size}: min=%.3f p10=%.3f median=%.3f".format(tenor.min(), q(tenor, 0.1), q(tenor, 0.5)))
         println("CAL other n=${other.size}: median=%.3f p90=%.3f max=%.3f".format(q(other, 0.5), q(other, 0.9), other.max()))
+    }
+
+    /** int8-энкодер против float: HOMR_MODELS (float) и HOMR_MODELS_Q (int8) на страницах HOMR_FULL=dir:name,name[:two]. */
+    @Test fun int8EncoderVsFloat() {
+        val qdir = System.getenv("HOMR_MODELS_Q")?.takeIf { it.isNotBlank() }?.let(::File)
+        val spec = System.getenv("HOMR_FULL")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && qdir != null && spec != null && System.getenv("HOMR_INT8") == "1")
+        fun files(d: File): HomrModelFiles {
+            fun f(pr: String): File = d.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+            return HomrModelFiles(f("segnet"), f("encoder"), f("decoder"))
+        }
+        var total = 0; var same = 0; var msF = 0L; var msQ = 0L
+        HomrPipeline(files(models!!)).use { pf -> HomrPipeline(files(qdir!!)).use { pq ->
+            for (part in spec!!.split(';')) {
+                val (dir, names, mode) = part.split(':').let { Triple(it[0], it[1], it.getOrNull(2)) }
+                for (name in names.split(',')) {
+                    val gray = loadGray(File(dir, "$name.png"))
+                    val t0 = System.currentTimeMillis(); val a = pf.recognizeAll(gray); val ta = System.currentTimeMillis() - t0
+                    val t1 = System.currentTimeMillis(); val b = pq.recognizeAll(gray); val tb = System.currentTimeMillis() - t1
+                    msF += ta; msQ += tb
+                    val sb = StringBuilder("INT8 $name: float ${ta} ms, int8 ${tb} ms |")
+                    for (v in ChoirVoice.values()) {
+                        fun notes(sys: List<List<StaffRead>>): List<Pair<Int, Double>> {
+                            val (tokens, shift) = if (mode == "two") Pair(ChoirAssigner.tokensForTwoStaff(v, sys), 0) else ChoirAssigner.tokensFor(v, sys)
+                            return ru.partitrainer.core.omr.ClaudeOmr.assemble(TokenParser.parse(tokens, shift)).score.voices.first().notes.map { it.midi to it.beats }
+                        }
+                        val x = notes(a); val y = notes(b)
+                        val eq = x.zip(y).count { it.first == it.second }
+                        sb.append(" ${v.name.take(1)} ${eq}/${x.size}"); total += x.size; same += eq
+                    }
+                    println(sb)
+                }
+            }
+        } }
+        println("INT8 TOTAL same $same of $total; float ${msF} ms vs int8 ${msQ} ms")
     }
 }
