@@ -44,8 +44,10 @@ object TokenParser {
     /** @param staffs токены каждого нотоносца в порядке чтения. */
     fun parse(staffs: List<List<EncodedSymbol>>, transpose: Int = 0): OmrParsed {
         var fifths: Int? = null
-        var den: Int? = null
+        val sigs = java.util.TreeMap<Int, Int>()   // номер такта → знаменатель размера
+        val pendingSigs = ArrayList<Int>()          // знаки размера, ещё не привязанные к такту
         val measures = ArrayList<Builder>()
+        fun commitSigs() { for (d in pendingSigs) sigs[measures.size] = d; pendingSigs.clear() }
         var cur = Builder()
         var volta = 0; var lastVoltaStopSize = -10; var inVolta = false
         var prevEvent: Ev? = null
@@ -70,7 +72,7 @@ object TokenParser {
                 val r = first.rhythm
                 when {
                     r.startsWith("keySignature_") -> if (fifths == null) fifths = r.substringAfter('_').toIntOrNull()
-                    r.startsWith("timeSignature/") -> if (den == null) den = r.substringAfter('/').toIntOrNull()
+                    r.startsWith("timeSignature/") -> r.substringAfter('/').toIntOrNull()?.let { pendingSigs += it }
                     r == "barline" || r == "doublebarline" || r == "bolddoublebarline" -> closeMeasure() // лига может пересекать тактовую черту
                     r == "repeatStart" -> { closeMeasure(); cur.repeatStart = true }
                     r == "repeatEnd" -> { cur.repeatEnd = true; closeMeasure() }
@@ -84,9 +86,10 @@ object TokenParser {
                         if (cur.events.isEmpty()) cur.ending = null
                     }
                     multiRest.matches(r) -> { /* многотактовая пауза: отдельные такты нам не нужны */ }
-                    r == REST_MEASURE -> { cur.events += Ev(null, FILL, false, ""); prevEvent = null }
+                    r == REST_MEASURE -> { commitSigs(); cur.events += Ev(null, FILL, false, ""); prevEvent = null }
                     r.startsWith("note_") || r.startsWith("rest_") -> {
                         val b = beats(r) ?: continue
+                        commitSigs()
                         if (r.startsWith("rest_")) { cur.events += Ev(null, b, false, ""); prevEvent = null; continue }
                         // из аккорда берём верхнюю ноту
                         val best = g.filter { it.rhythm.startsWith("note_") }
@@ -103,24 +106,53 @@ object TokenParser {
             }
             // конец строки: открытый такт с нотами закрываем
             if (cur.events.isNotEmpty()) closeMeasure()
+            commitSigs()   // «запасной» знак в конце строки — для следующего такта
         }
         if (cur.events.isNotEmpty() || cur.repeatEnd) measures += cur
 
-        // Размер: знаменатель из токена, числитель — по самому частому полному такту.
-        val d = den ?: 4
+        // Размер: знаменатель из токена, числитель — по первому такту, начинающемуся с этого знака;
+        // если такта нет — по самому частому полному такту. Метр может меняться по ходу пьесы.
+        val firstDen = sigs.firstEntry()?.value ?: 4
         val totals = measures.filter { b -> b.events.none { it.beats == FILL } }.map { it.total() }.filter { it > 0 }
         val common = totals.groupingBy { (it * 48).roundToInt() }.eachCount().maxByOrNull { it.value }?.key?.let { it / 48.0 } ?: 4.0
-        val num = (common * d / 4.0).roundToInt().coerceAtLeast(1)
-        val barLen = num * 4.0 / d
+        class Meter(val num: Int, val den: Int) { val len get() = num * 4.0 / den }
+        val meterAt = java.util.TreeMap<Int, Meter>()
+        for ((idx, d) in sigs) {
+            val m = measures.getOrNull(idx)
+            val t = if (m != null && m.events.none { it.beats == FILL } && m.total() > 0) m.total() else common
+            meterAt[idx] = Meter((t * d / 4.0).roundToInt().coerceAtLeast(1), d)
+        }
+        // до первого знака размера (страница начинается посреди пьесы) метр определяем по содержанию тактов
+        val prefixMeter = Meter(common.roundToInt().coerceAtLeast(1), 4)
+        val globalMeter = if (meterAt.isEmpty() || meterAt.firstKey() > 0) (if (meterAt.isEmpty()) Meter((common * firstDen / 4.0).roundToInt().coerceAtLeast(1), firstDen) else prefixMeter) else meterAt.firstEntry().value
+        fun meterFor(i: Int): Meter = meterAt.floorEntry(i)?.value ?: globalMeter
+
+        // Знак размера в конце строки модель часто не читает. Если такт без знака имеет иную длину, чем текущий метр,
+        // а следующий такт совпадает с ним по длине — считаем это сменой метра (числитель при том же знаменателе).
+        val implicit = java.util.TreeMap<Int, Meter>()
+        for (i in 1 until measures.size - 1) {
+            if (sigs.containsKey(i) || implicit.containsKey(i)) continue
+            val latest = listOfNotNull(meterAt.floorEntry(i), implicit.floorEntry(i)).maxByOrNull { it.key }?.value ?: globalMeter
+            val a = measures[i]; val b = measures[i + 1]
+            if (a.events.any { it.beats == FILL } || b.events.any { it.beats == FILL }) continue
+            val ta = a.total(); val tb = b.total()
+            if (Math.abs(ta - latest.len) > 0.02 && Math.abs(ta - tb) < 0.02 && ta > 0) {
+                val num = (ta * latest.den / 4.0).roundToInt()
+                if (num >= 1 && Math.abs(num * 4.0 / latest.den - ta) < 0.02) implicit[i] = Meter(num, latest.den)
+            }
+        }
+        for ((k, v) in implicit) meterAt[k] = v
 
         val out = measures.mapIndexed { i, b ->
+            val mt = meterFor(i)
             OmrMeasure(
                 n = i + 1, chord = null,
-                pickup = i == 0 && b.events.none { it.beats == FILL } && b.total() < barLen - 0.02 && measures.size > 1,
-                events = b.events.map { OmrEvent(it.midi, if (it.beats == FILL) barLen else it.beats, it.tie, null) },
+                pickup = i == 0 && b.events.none { it.beats == FILL } && b.total() < mt.len - 0.02 && measures.size > 1,
+                events = b.events.map { OmrEvent(it.midi, if (it.beats == FILL) mt.len else it.beats, it.tie, null) },
                 repeatStart = b.repeatStart, repeatEnd = b.repeatEnd, ending = b.ending, marks = emptyList(),
+                timeNum = mt.num, timeDen = mt.den,
             )
         }
-        return OmrParsed(null, fifths ?: 0, num, d, null, out)
+        return OmrParsed(null, fifths ?: 0, globalMeter.num, globalMeter.den, null, out)
     }
 }

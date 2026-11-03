@@ -299,8 +299,8 @@ private fun PhraseCard(
     activeMain: Set<Int>, singActive: Int?, selected: Int?, looping: Boolean, playing: Boolean,
     onNote: (Int) -> Unit, onPlay: () -> Unit, onLoop: () -> Unit, onStop: () -> Unit, onSing: () -> Unit, bpmBeats: Double,
 ) {
-    val m1 = Math.floor(phrase.startBeat / bpmBeats + 1e-9).toInt() + 1
-    val m2 = Math.floor((phrase.endBeat - 1e-6) / bpmBeats).toInt() + 1
+    val m1 = notes.firstOrNull()?.measure ?: (Math.floor(phrase.startBeat / bpmBeats + 1e-9).toInt() + 1)
+    val m2 = notes.lastOrNull()?.measure ?: m1
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

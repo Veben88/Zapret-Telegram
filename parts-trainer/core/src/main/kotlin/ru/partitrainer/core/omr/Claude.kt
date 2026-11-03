@@ -31,6 +31,9 @@ data class OmrMeasure(
     val marks: List<String>,
     val uncertain: Boolean = false,
     val uncertainReason: String? = null,
+    /** Собственный размер такта (если в пьесе меняется метр); null — размер всей пьесы. */
+    val timeNum: Int? = null,
+    val timeDen: Int? = null,
 ) {
     val total: Double get() = events.sumOf { it.beats }
 }
@@ -118,12 +121,14 @@ ending — номер вольты (1, 2) или null. Сумма d в кажд�
     }
 
     /** Номера (индексы в списке) тактов, у которых сумма длительностей не сходится. Затакт и последний такт не проверяются. */
+    fun nominalLength(p: OmrParsed, m: OmrMeasure): Double =
+        if (m.timeNum != null && m.timeDen != null) m.timeNum * 4.0 / m.timeDen else p.timeNum * 4.0 / p.timeDen
+
     fun badMeasures(p: OmrParsed): List<Int> {
-        val len = p.timeNum * 4.0 / p.timeDen
         return p.measures.indices.filter { i ->
             val m = p.measures[i]
             !m.pickup && i != p.measures.lastIndex &&
-                Math.abs(m.total - len) > 0.02
+                Math.abs(m.total - nominalLength(p, m)) > 0.02
         }
     }
 
@@ -138,7 +143,6 @@ ending — номер вольты (1, 2) или null. Сумма d в кажд�
 
     /** Склеивает такты в голос: затакт идёт раньше нулевого бита, залигованные ноты сливаются. */
     fun assemble(p: OmrParsed, voiceLabel: String = "Вокал"): Assembled {
-        val len = p.timeNum * 4.0 / p.timeDen
         val notes = ArrayList<Note>()
         val marks = ArrayList<MeasureMark>()
         var t = 0.0
@@ -158,7 +162,9 @@ ending — номер вольты (1, 2) или null. Сумма d в кажд�
                 if (!e.tie) openTie = -1
                 cur += e.beats
             }
-            val mLen = if (m.pickup || (idx == p.measures.lastIndex && m.total < len)) m.total.coerceAtLeast(0.25) else len
+            val nominal = nominalLength(p, m)
+            // короче номинала — держим сетку тактов; длиннее (смена метра, лишние доли) — такт растягивается, ноты не накладываются
+            val mLen = if (m.pickup || (idx == p.measures.lastIndex && m.total < nominal)) m.total.coerceAtLeast(0.25) else maxOf(nominal, m.total)
             val lowerMarks = m.marks.map { it.lowercase().replace(Regex("[\\s.]+"), " ").trim() }
             val jump = lowerMarks.firstNotNullOfOrNull { parseJump(it) }
             marks += MeasureMark(

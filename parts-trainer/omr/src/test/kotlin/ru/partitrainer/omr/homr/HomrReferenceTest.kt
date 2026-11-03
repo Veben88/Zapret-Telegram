@@ -310,6 +310,8 @@ class HomrReferenceTest {
                     val notes = asm.score.voices.first().notes.map { if (v == ChoirVoice.TENOR) it.copy(midi = it.midi - shift) else it }
                     voices += asm.score.voices.first().copy(id = v.name, notes = notes)
                     val bad = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(parsed)
+                    if (System.getenv("HOMR_VERBOSE") == v.name) println("  TOK " + tokens.flatten().joinToString(" ") { it.rhythm.replace("note_", "n").replace("barline", "|").replace("timeSignature/", "TS") })
+                    if (System.getenv("HOMR_VERBOSE") == v.name) println("  MEAS " + parsed.measures.joinToString(" ") { "[${it.timeNum}/${it.timeDen}:${"%.2f".format(it.total)}${if (it.pickup) "p" else ""}]" })
                     println("  $v: measures=${parsed.measures.size} notes=${notes.size} key=${parsed.keyFifths} time=${parsed.timeNum}/${parsed.timeDen} badMeasures=${bad.size} first=" + notes.take(6).joinToString(" ") { nm(it.midi) })
                 }
                 if (score != null) File(dir, "${name}_kt.musicxml").writeText(ru.partitrainer.core.io.MusicXmlWriter.write(score.copy(voices = voices), voices))
