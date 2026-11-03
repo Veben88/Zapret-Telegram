@@ -57,14 +57,7 @@ fun EditorScreen(projectId: Long, onBack: () -> Unit, onDone: (Long) -> Unit) {
     var bigThumb by remember { mutableStateOf(false) }
 
     val thumb by produceState<Bitmap?>(null, project?.sourcePath, project?.pageIndex, project?.rotation) {
-        val p = project ?: return@produceState
-        val path = p.sourcePath ?: return@produceState
-        val renderer = PageRenderer(File(path), p.sourceType == "PDF")
-        try {
-            value = runCatching { renderer.thumbnail(p.pageIndex, 1100, p.rotation) }.getOrNull()
-        } finally {
-            renderer.close()
-        }
+        value = loadSourceThumb(project)
     }
 
     Scaffold(
@@ -281,4 +274,15 @@ private fun MarkDialog(number: Int, mark: MeasureMark, onDismiss: () -> Unit, on
         confirmButton = { TextButton(onClick = { onSave(m) }) { Text(stringResource(R.string.ok)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
+}
+
+/** Миниатюра страницы-источника (PDF или фото) для сверки с нотами; null, если источника нет или он не читается. */
+private suspend fun loadSourceThumb(p: ru.partitrainer.data.Project?): Bitmap? {
+    val path = p?.sourcePath ?: return null
+    val renderer = PageRenderer(File(path), p.sourceType == "PDF")
+    return try {
+        runCatching { renderer.thumbnail(p.pageIndex, 1100, p.rotation) }.getOrNull()
+    } finally {
+        renderer.close()
+    }
 }
