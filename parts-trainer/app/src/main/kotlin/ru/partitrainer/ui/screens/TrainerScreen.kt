@@ -106,7 +106,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
         if (totalBeats > 0) PlayheadBar(beatState, countIn, totalBeats, active, ui.playing, d, notes, curPhrase, { b -> vm.playFrom(b) }, vm::stop, onPause = vm::pause, onResume = vm::resumePlayback)
     }
     val keyboard: @Composable () -> Unit = {
-        PianoKeyboard(kbLow, kbHigh, notation, targets, activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::tapKey, Modifier.padding(vertical = 6.dp))
+        PianoKeyboard(kbLow, kbHigh, notation, targets, activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::keyDown, vm::keyUp, ui.settings.keyHaptics, Modifier.padding(vertical = 4.dp))
     }
     val measureStarts = d.measureStarts
     var originalMode by rememberSaveable { mutableStateOf(false) }

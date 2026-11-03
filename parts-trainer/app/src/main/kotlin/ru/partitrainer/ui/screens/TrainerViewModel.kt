@@ -236,7 +236,18 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
         playMidi(n.midi)
     }
 
-    fun tapKey(midi: Int) { _ui.value = _ui.value.copy(selectedNote = null); playMidi(midi) }
+    private val heldKeys = HashMap<Int, Long>()
+
+    /** Клавиша пианино нажата: звук идёт, пока она удерживается. */
+    fun keyDown(midi: Int) {
+        _ui.value = _ui.value.copy(selectedNote = null)
+        c.synth.masterVolume = _ui.value.settings.volume; c.synth.sustain = _ui.value.settings.sustain
+        refreshHeadphones()
+        heldKeys.remove(midi)?.let { c.playback.keyUp(it) }
+        heldKeys[midi] = c.playback.keyDown(midi, kind())
+    }
+
+    fun keyUp(midi: Int) { heldKeys.remove(midi)?.let { c.playback.keyUp(it) } }
 
     private fun playMidi(midi: Int) {
         c.synth.masterVolume = _ui.value.settings.volume; c.synth.sustain = _ui.value.settings.sustain

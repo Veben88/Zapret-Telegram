@@ -133,6 +133,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.key_haptics), Modifier.weight(1f))
+                Switch(s.keyHaptics, { v -> vm.update { it.copy(keyHaptics = v) } })
+            }
+
             SectionTitle(R.string.set_tolerance)
             Text(stringResource(R.string.tolerance_value, s.toleranceCents))
             Slider(s.toleranceCents.toFloat(), { v -> vm.update { it.copy(toleranceCents = v.toInt()) } }, valueRange = 20f..80f, steps = 11)

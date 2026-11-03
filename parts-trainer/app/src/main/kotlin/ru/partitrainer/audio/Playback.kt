@@ -84,6 +84,11 @@ class PlaybackEngine(context: Context, private val synth: Synth) {
         scope?.launch { delay(if (kind == Synth.Kind.AAH) 700 else 900); synth.noteOff(h) }
     }
 
+    /** Клавиша нажата: нота звучит, пока её не отпустят ([keyUp]). */
+    fun keyDown(midi: Int, kind: Synth.Kind): Long = synth.noteOn(midi, 1f, kind)
+
+    fun keyUp(handle: Long) = synth.noteOff(handle)
+
     fun play(
         tracks: List<PlayTrack>, fromBeat: Double, toBeat: Double, bpm: Int, kind: Synth.Kind,
         loop: Boolean = false, countInBeats: Int = 0, onFinished: () -> Unit = {},

@@ -209,4 +209,7 @@
     <string name="phrase_auto">Авто</string>
     <string name="set_caret_color">Цвет каретки</string>
     <string name="caret_color_hint">Каретка и подсветка такта в нотах и на странице оригинала.</string>
+    <string name="keys_octave_down">Клавиатура на октаву влево</string>
+    <string name="keys_octave_up">Клавиатура на октаву вправо</string>
+    <string name="key_haptics">Вибрация при нажатии клавиш</string>
 </resources>

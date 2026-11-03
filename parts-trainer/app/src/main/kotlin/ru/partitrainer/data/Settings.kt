@@ -40,6 +40,8 @@ data class Settings(
     /** Распознавать слова под нотами (текст) при чтении нот на устройстве. */
     val omrLyrics: Boolean = false,
     val caretColor: CaretColor = CaretColor.ACCENT,
+    /** Лёгкая вибрация при нажатии клавиш пианино. */
+    val keyHaptics: Boolean = true,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -62,6 +64,7 @@ class SettingsRepository(private val context: Context) {
         val sustain = floatPreferencesKey("sustain")
         val lyrics = booleanPreferencesKey("omr_lyrics")
         val caret = stringPreferencesKey("caret_color")
+        val keyHaptics = booleanPreferencesKey("key_haptics")
     }
 
     val flow: Flow<Settings> = context.dataStore.data.map { snapshot(it) }
@@ -74,7 +77,7 @@ class SettingsRepository(private val context: Context) {
             p[K.theme] = n.theme.name; p[K.tolerance] = n.toleranceCents; p[K.octave] = n.matchOctave
             p[K.volume] = n.volume; p[K.other] = n.otherVoicesVolume; p[K.playOthers] = n.playOthers
             p[K.countIn] = n.countIn; p[K.phrase] = n.measuresPerPhrase; p[K.warned] = n.claudeWarningAccepted; p[K.accurate] = n.omrAccurate
-            p[K.sustain] = n.sustain; p[K.lyrics] = n.omrLyrics; p[K.caret] = n.caretColor.name
+            p[K.sustain] = n.sustain; p[K.lyrics] = n.omrLyrics; p[K.caret] = n.caretColor.name; p[K.keyHaptics] = n.keyHaptics
         }
     }
 
@@ -96,6 +99,7 @@ class SettingsRepository(private val context: Context) {
             omrAccurate = p[K.accurate] ?: d.omrAccurate,
             sustain = (p[K.sustain] ?: d.sustain).coerceIn(0f, 1f),
             omrLyrics = p[K.lyrics] ?: d.omrLyrics,
+            keyHaptics = p[K.keyHaptics] ?: d.keyHaptics,
             caretColor = p[K.caret]?.let { runCatching { CaretColor.valueOf(it) }.getOrNull() } ?: d.caretColor,
         )
     }
