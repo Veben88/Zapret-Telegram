@@ -257,4 +257,23 @@ class HomrReferenceTest {
         for (l in lines.take(40)) { println("  y=%.1f gap=%.1f x=%d..%d".format(l.y, l.y - prev, l.minX, l.maxX)); prev = l.y }
         println("STAVES " + StaffDetector.groupStaves(lines, page.height).map { "${it.minY}-${it.maxY}(u=%.1f)".format(it.unit) })
     }
+
+    @Test fun exportChoirXml() {
+        val real = System.getenv("HOMR_REAL")?.takeIf { it.isNotBlank() }?.let(::File)
+        assumeTrue(models != null && real != null && System.getenv("HOMR_XML") == "1")
+        HomrPipeline(modelFiles()).use { p ->
+            val systems = p.recognizeAll(loadGray(File(real, "p1.png")))
+            var score: ru.partitrainer.core.model.Score? = null
+            val voices = ArrayList<ru.partitrainer.core.model.Voice>()
+            for (v in ChoirVoice.values()) {
+                val (tokens, shift) = ChoirAssigner.tokensFor(v, systems)
+                val asm = ru.partitrainer.core.omr.ClaudeOmr.assemble(TokenParser.parse(tokens, shift), v.name)
+                if (score == null) score = asm.score
+                // для проверки на глаз возвращаем тенор на написанную высоту (+12): так он совпадёт с картинкой
+                val notes = asm.score.voices.first().notes.map { if (v == ChoirVoice.TENOR) it.copy(midi = it.midi - shift) else it }
+                voices += asm.score.voices.first().copy(id = v.name, notes = notes)
+            }
+            File(real, "kt_p1.musicxml").writeText(ru.partitrainer.core.io.MusicXmlWriter.write(score!!.copy(voices = voices), voices))
+        }
+    }
 }
