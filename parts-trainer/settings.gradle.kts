@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "parts-trainer"
-include(":core", ":app")
+include(":core", ":omr", ":app")

@@ -1,0 +1,81 @@
+package ru.partitrainer.omr.homr
+
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import java.nio.FloatBuffer
+
+/** Классы сегментации (порядок из homr). */
+object SegClass { const val BACKGROUND = 0; const val STEMS_RESTS = 1; const val NOTEHEAD = 2; const val CLEFS_KEYS = 3; const val STAFF = 4; const val SYMBOLS = 5 }
+
+/** Карта классов страницы: один байт на пиксель. */
+class SegMap(val width: Int, val height: Int, val cls: ByteArray) {
+    fun count(c: Int): Int { var n = 0; val b = c.toByte(); for (v in cls) if (v == b) n++; return n }
+}
+
+/**
+ * Сегментация нотной страницы нейросетью segnet (ONNX), без перекрытия окон (шаг = 320, как в homr).
+ * Вход — «сырые» значения яркости 0..255, три одинаковых канала.
+ */
+class Segnet(private val env: OrtEnvironment, private val session: OrtSession, private val batchSize: Int = 8) {
+    companion object {
+        const val WIN = 320
+    }
+
+    private val inputName = session.inputNames.first()
+
+    fun segment(page: GrayImage, onProgress: (Int, Int) -> Unit = { _, _ -> }): SegMap {
+        val h = page.height; val w = page.width
+        // Координаты окон: как в inference() + merge_patches()
+        val ys = (0 until maxOf(h, WIN) step WIN).map { minOf(it, h - WIN) }
+        val xs = (0 until maxOf(w, WIN) step WIN).map { minOf(it, w - WIN) }
+        val recon = FloatArray(w * h)
+        val weight = ByteArray(w * h)
+        val coords = ArrayList<IntArray>()
+        for (y in ys) for (x in xs) coords += intArrayOf(y, x)
+
+        var done = 0
+        var i = 0
+        while (i < coords.size) {
+            val n = minOf(batchSize, coords.size - i)
+            val input = FloatArray(n * 3 * WIN * WIN)
+            for (b in 0 until n) {
+                val (y0, x0) = coords[i + b].let { it[0] to it[1] }
+                val base = b * 3 * WIN * WIN
+                for (py in 0 until WIN) for (px in 0 until WIN) {
+                    val sy = y0 + py; val sx = x0 + px
+                    val v = if (sy in 0 until h && sx in 0 until w) page[sx, sy].toFloat() else 255f
+                    val o = base + py * WIN + px
+                    input[o] = v; input[o + WIN * WIN] = v; input[o + 2 * WIN * WIN] = v
+                }
+            }
+            OnnxTensor.createTensor(env, FloatBuffer.wrap(input), longArrayOf(n.toLong(), 3, WIN.toLong(), WIN.toLong())).use { t ->
+                session.run(mapOf(inputName to t)).use { res ->
+                    val out = res[0] as OnnxTensor
+                    val shape = out.info.shape            // [n, C, 320, 320]
+                    val classes = shape[1].toInt()
+                    val buf = out.floatBuffer
+                    val plane = WIN * WIN
+                    for (b in 0 until n) {
+                        val (y0, x0) = coords[i + b].let { it[0] to it[1] }
+                        val base = b * classes * plane
+                        for (p in 0 until plane) {
+                            var best = 0; var bv = buf.get(base + p)
+                            for (c in 1 until classes) { val v = buf.get(base + c * plane + p); if (v > bv) { bv = v; best = c } }
+                            val sy = y0 + p / WIN; val sx = x0 + p % WIN
+                            if (sy in 0 until h && sx in 0 until w) { val o = sy * w + sx; recon[o] += best.toFloat(); weight[o]++ }
+                        }
+                    }
+                }
+            }
+            i += n; done += n
+            onProgress(done, coords.size)
+        }
+        val cls = ByteArray(w * h)
+        for (k in cls.indices) {
+            val wt = if (weight[k].toInt() == 0) 1 else weight[k].toInt()
+            cls[k] = (recon[k] / wt).toInt().toByte()   // усечение, как astype(int64) в homr
+        }
+        return SegMap(w, h, cls)
+    }
+}

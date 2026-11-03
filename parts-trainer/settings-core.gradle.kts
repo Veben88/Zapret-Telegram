@@ -11,4 +11,4 @@ dependencyResolutionManagement {
     repositories { mavenCentral() }
 }
 rootProject.name = "parts-trainer"
-include(":core")
+include(":core", ":omr")
