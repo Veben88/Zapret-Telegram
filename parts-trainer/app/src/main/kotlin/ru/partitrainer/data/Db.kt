@@ -55,6 +55,9 @@ interface PartiDao {
     @Query("SELECT * FROM projects WHERE id = :id")
     suspend fun project(id: Long): ProjectEntity?
 
+    @Query("SELECT * FROM projects ORDER BY createdAt")
+    suspend fun allProjects(): List<ProjectEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(p: ProjectEntity): Long
 
@@ -72,6 +75,16 @@ interface PartiDao {
 
     @Query("DELETE FROM omr_cache")
     suspend fun clearCache()
+
+    /** Оставляет только [keep] последних результатов распознавания — кэш не растёт бесконечно. */
+    @Query("DELETE FROM omr_cache WHERE cacheKey NOT IN (SELECT cacheKey FROM omr_cache ORDER BY createdAt DESC LIMIT :keep)")
+    suspend fun pruneCache(keep: Int)
+
+    @Query("SELECT COUNT(*) FROM projects WHERE sourcePath = :path")
+    suspend fun countBySource(path: String): Int
+
+    @Query("SELECT sourcePath FROM projects WHERE id = :id")
+    suspend fun sourceOf(id: Long): String?
 }
 
 @Database(entities = [ProjectEntity::class, OmrCacheEntity::class], version = 1, exportSchema = true)

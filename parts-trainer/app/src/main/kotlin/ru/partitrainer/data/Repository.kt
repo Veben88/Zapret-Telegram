@@ -33,6 +33,12 @@ class ProjectRepository(private val dao: PartiDao) {
 
     fun observe(): Flow<List<ProjectEntity>> = dao.observeProjects()
 
+    /** Для резервной копии: все проекты как есть (кроме встроенного примера). */
+    suspend fun allForBackup(): List<ProjectEntity> = dao.allProjects().filter { !it.isSample }
+
+    /** Восстановление: вставляет проект под новым номером. */
+    suspend fun insertRestored(e: ProjectEntity): Long = dao.upsert(e.copy(id = 0))
+
     suspend fun load(id: Long): Project? = dao.project(id)?.toProject()
 
     suspend fun save(p: Project, now: Long = System.currentTimeMillis()): Long {
@@ -58,9 +64,17 @@ class ProjectRepository(private val dao: PartiDao) {
     }
 
     suspend fun rename(id: Long, title: String) = dao.rename(id, title.trim().ifEmpty { "Без названия" }, System.currentTimeMillis())
-    suspend fun delete(id: Long) = dao.delete(id)
+    /** Удаляет проект и файл исходника (копию PDF/фото), если на него больше не ссылается ни один проект. */
+    suspend fun delete(id: Long) {
+        val src = dao.sourceOf(id)
+        dao.delete(id)
+        if (src != null && dao.countBySource(src) == 0) runCatching { java.io.File(src).delete() }
+    }
     suspend fun cached(key: String): String? = dao.cached(key)?.resultJson
-    suspend fun putCache(key: String, resultJson: String) = dao.putCache(OmrCacheEntity(key, resultJson, System.currentTimeMillis()))
+    suspend fun putCache(key: String, resultJson: String) {
+        dao.putCache(OmrCacheEntity(key, resultJson, System.currentTimeMillis()))
+        dao.pruneCache(30)
+    }
     suspend fun clearCache() = dao.clearCache()
 
     /** Создаёт проект из встроенного примера (или возвращает существующий). */

@@ -19,6 +19,8 @@ android {
         versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: run ?: 1
         versionName = (project.findProperty("versionName") as String?) ?: (if (run != null) "0.1.$run" else "0.1.0")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Без 32-битного x86: ONNX Runtime — самая тяжёлая часть APK, а такие устройства практически не встречаются
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 
     // Подпись релиза — только из переменных окружения (секреты CI); в репозитории ключей нет.

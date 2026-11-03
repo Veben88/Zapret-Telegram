@@ -44,6 +44,25 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     val hasKey = MutableStateFlow(c.keyStore.hasKey())
     val cacheCleared = MutableStateFlow(false)
     fun update(f: (Settings) -> Settings) = viewModelScope.launch { c.settings.update(f) }
+
+    val backupMessage = MutableStateFlow<String?>(null)
+
+    fun exportBackup(uri: android.net.Uri) = viewModelScope.launch {
+        backupMessage.value = try {
+            val n = c.context.contentResolver.openOutputStream(uri)?.use { c.backup.export(it) } ?: throw IllegalStateException("Не удалось создать файл")
+            "Сохранено партий: $n"
+        } catch (e: Exception) { "Не удалось сохранить: ${e.message}" }
+    }
+
+    fun importBackup(uri: android.net.Uri) = viewModelScope.launch {
+        backupMessage.value = try {
+            val r = c.context.contentResolver.openInputStream(uri)?.use { c.backup.restore(it) } ?: throw IllegalStateException("Не удалось открыть файл")
+            "Восстановлено: ${r.restored}" + if (r.skipped > 0) ", уже были: ${r.skipped}" else ""
+        } catch (e: Exception) { "Не удалось восстановить: ${e.message}" }
+    }
+
+    /** «Точный режим» включён — докачать модель сегментации, если её нет. */
+    fun ensureSegnet() { if (!c.homrModels.segnetInstalled()) c.homrModels.startDownload(withSegnet = true) }
     fun saveKey(k: String) { if (k.isNotBlank()) { c.keyStore.save(k); hasKey.value = true } }
     fun deleteKey() { c.keyStore.delete(); hasKey.value = false }
     val models get() = c.homrModels
@@ -59,6 +78,9 @@ fun SettingsScreen(onBack: () -> Unit) {
     val cleared by vm.cacheCleared.collectAsState()
     val models by vm.models.state.collectAsState()
     var keyInput by remember { mutableStateOf("") }
+    val backupMsg by vm.backupMessage.collectAsState()
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/zip")) { it?.let(vm::exportBackup) }
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { it?.let(vm::importBackup) }
 
     Scaffold(topBar = {
         TopAppBar(title = { Text(stringResource(R.string.settings)) }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } })
@@ -94,7 +116,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Text(stringResource(R.string.omr_accurate))
                     Text(stringResource(R.string.omr_accurate_hint), style = MaterialTheme.typography.bodySmall)
                 }
-                Switch(s.omrAccurate, { v -> vm.update { it.copy(omrAccurate = v) } })
+                Switch(s.omrAccurate, { v -> vm.update { it.copy(omrAccurate = v) }; if (v) vm.ensureSegnet() })
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -105,6 +127,15 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Switch(s.omrLyrics, { v -> vm.update { it.copy(omrLyrics = v) } })
             }
             OutlinedButton(onClick = vm::clearCache, Modifier.heightIn(min = 48.dp)) { Text(stringResource(if (cleared) R.string.cache_cleared else R.string.clear_cache)) }
+
+            HorizontalDivider()
+            SectionTitle(R.string.set_backup)
+            Text(stringResource(R.string.backup_hint), style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { exportLauncher.launch("partitrainer-backup.zip") }, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.backup_save)) }
+                OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.backup_restore)) }
+            }
+            backupMsg?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
 
             HorizontalDivider()
             SectionTitle(R.string.set_notation)

@@ -72,7 +72,14 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
 
     // Экран не гаснет в режиме «Спой фразу»
     val view = LocalView.current
-    DisposableEffect(ui.singing != null) { view.keepScreenOn = ui.singing != null; onDispose { view.keepScreenOn = false } }
+    val keepOn = ui.singing != null || ui.playing
+    DisposableEffect(keepOn) { view.keepScreenOn = keepOn; onDispose { view.keepScreenOn = false } }
+    // Ушли с экрана или свернули приложение: звук и микрофон не должны продолжаться в фоне
+    DisposableEffect(Unit) { onDispose { vm.stop(); vm.setMic(false) } }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+        vm.pause()
+        if (ui.micOn) vm.setMic(false)
+    }
 
     // Разрешение микрофона
     var pendingSing by remember { mutableStateOf<Int?>(null) }

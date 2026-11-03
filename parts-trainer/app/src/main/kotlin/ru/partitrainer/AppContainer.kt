@@ -23,6 +23,7 @@ class AppContainer(val context: Context) {
     val importer: Importer by lazy { Importer(sources, projects) }
     val homrModels: HomrModelManager by lazy { HomrModelManager(context) }
     val layouts: ru.partitrainer.data.LayoutStore by lazy { ru.partitrainer.data.LayoutStore(context) }
+    val backup: ru.partitrainer.util.BackupManager by lazy { ru.partitrainer.util.BackupManager(context, projects, layouts) }
     val synth: Synth by lazy { Synth() }
     val playback: PlaybackEngine by lazy { PlaybackEngine(context, synth) }
 }

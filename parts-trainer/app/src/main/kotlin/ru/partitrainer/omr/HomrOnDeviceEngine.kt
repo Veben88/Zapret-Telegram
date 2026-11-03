@@ -43,6 +43,9 @@ class HomrOnDeviceEngine(
 
     override suspend fun recognize(request: OmrRequest, onProgress: (OmrProgress) -> Unit): OmrParsed {
         val files = models.files() ?: throw OmrException("Модели не скачаны", offerManual = false)
+        if (request.accurate && !models.segnetInstalled()) {
+            throw OmrException("Включён «Точный режим», но модель сегментации (≈${models.segnetSizeMb} МБ) не скачана. Откройте Настройки → Распознавание и включите режим заново.", offerManual = false)
+        }
         if (request.staff.isChoirVoice) return recognizeChoir(files, request, onProgress)
         val sel = when (request.staff) {
             StaffSelection.RIGHT_HAND -> StaffDetector.Staff.RIGHT_HAND
@@ -76,6 +79,8 @@ class HomrOnDeviceEngine(
                     }
                 }
             }
+        } catch (e: ru.partitrainer.omr.homr.SegnetMissingException) {
+            throw OmrException("Нотоносцы не найдены обычным способом. Включите «Точный режим» в настройках (скачает ещё ≈${models.segnetSizeMb} МБ) или введите ноты вручную.", offerManual = true)
         } catch (e: InterruptedException) {
             throw CancellationException("Отменено")
         } catch (e: OutOfMemoryError) {
@@ -127,6 +132,8 @@ class HomrOnDeviceEngine(
                     }
                 } finally { pipeline?.close() }
             }
+        } catch (e: ru.partitrainer.omr.homr.SegnetMissingException) {
+            throw OmrException("Нотоносцы не найдены обычным способом. Включите «Точный режим» в настройках (скачает ещё ≈${models.segnetSizeMb} МБ) или введите ноты вручную.", offerManual = true)
         } catch (e: InterruptedException) {
             throw CancellationException("Отменено")
         } catch (e: OutOfMemoryError) {

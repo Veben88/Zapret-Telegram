@@ -194,7 +194,7 @@
     <string name="choir_two_staff">Хор на двух строках + фортепиано</string>
     <string name="choir_two_staff_hint">SA на верхней строке и TB на нижней (дивизи), под ними фортепиано. Верхний голос строки — S (T), нижний — A (B).</string>
     <string name="omr_accurate">Точный режим (на устройстве)</string>
-    <string name="omr_accurate_hint">Использует нейросеть для поиска линеек: медленнее на ≈ 30 %, но надёжнее на сильно изогнутых фото (разворот книги). Обычно не нужен.</string>
+    <string name="omr_accurate_hint">Использует нейросеть для поиска линеек: медленнее на ≈ 30 %, но надёжнее на сильно изогнутых фото (разворот книги). Обычно не нужен. При первом включении скачает ещё ≈ 53 МБ.</string>
     <string name="sustain_label">Сустейн (затухание звука): %1$d%%</string>
     <string name="sustain_hint">Чем больше, тем дольше звучит нота после конца и тем плавнее переходы через паузы.</string>
     <string name="playhead_pos">Фраза %1$d из %2$d · такт %3$d</string>
@@ -212,4 +212,8 @@
     <string name="keys_octave_down">Клавиатура на октаву влево</string>
     <string name="keys_octave_up">Клавиатура на октаву вправо</string>
     <string name="key_haptics">Вибрация при нажатии клавиш</string>
+    <string name="set_backup">Резервная копия</string>
+    <string name="backup_hint">Все партии, исходные PDF/фото и раскладка тактов — одним файлом, который вы сохраняете сами (куда угодно). Пригодится перед переустановкой приложения или переносом на другое устройство. Автоматических облачных копий приложение не делает.</string>
+    <string name="backup_save">Сохранить копию</string>
+    <string name="backup_restore">Восстановить из копии</string>
 </resources>

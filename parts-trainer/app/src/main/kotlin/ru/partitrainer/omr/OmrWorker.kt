@@ -129,6 +129,12 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
                 }
             } catch (e: OmrException) {
                 return Result.failure(workDataOf(OmrJob.KEY_ERROR to e.userMessage, OmrJob.KEY_MANUAL to e.offerManual))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: OutOfMemoryError) {
+                return Result.failure(workDataOf(OmrJob.KEY_ERROR to "Не хватило памяти. Закройте другие приложения, выберите меньше страниц или используйте движок Claude Vision.", OmrJob.KEY_MANUAL to true))
+            } catch (e: Exception) {
+                return Result.failure(workDataOf(OmrJob.KEY_ERROR to "Неожиданная ошибка распознавания: ${e.message ?: e.javaClass.simpleName}. Попробуйте ещё раз или введите ноты вручную.", OmrJob.KEY_MANUAL to true))
             }
             val b = base!!
             val score = b.score.copy(title = b.score.title ?: job.title, voices = voices)

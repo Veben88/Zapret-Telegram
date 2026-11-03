@@ -78,7 +78,7 @@ fun PianoKeyboard(
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
-    val measurer = rememberTextMeasurer()
+    val measurer = rememberTextMeasurer(cacheSize = 128)
     val white = MaterialTheme.colorScheme.surface
     val outline = MaterialTheme.colorScheme.outline
     val onSurface = MaterialTheme.colorScheme.onSurface

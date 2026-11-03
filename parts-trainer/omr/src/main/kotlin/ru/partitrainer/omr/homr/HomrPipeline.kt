@@ -8,8 +8,11 @@ import kotlin.math.min
 
 /** Файлы моделей homr (ONNX). */
 class HomrModelFiles(val segnet: File, val encoder: File, val decoder: File) {
-    fun exist() = segnet.isFile && encoder.isFile && decoder.isFile
+    fun exist() = encoder.isFile && decoder.isFile
 }
+
+/** Быстрый поиск линеек не справился, а модель сегментации не скачана. */
+class SegnetMissingException : Exception("модель сегментации не скачана")
 
 /** Результат по одной странице. */
 class PageTokens(
@@ -77,6 +80,7 @@ class HomrPipeline(
             if (located != null) { usedClassic = true; return located }
         }
         usedClassic = false
+        if (!files.segnet.isFile) throw SegnetMissingException()
         onProgress(0, 1, "Сегментация нот")
         val segnet = Segnet(env, segSession)
         fun segment(img: GrayImage) = timed("segnet") { segnet.segment(img) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") } }

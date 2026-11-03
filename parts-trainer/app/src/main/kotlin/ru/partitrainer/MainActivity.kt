@@ -10,6 +10,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import ru.partitrainer.data.Settings
@@ -30,9 +33,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         if (savedInstanceState == null) handle(intent)
         setContent {
-            val settings by container.settings.flow.collectAsState(initial = Settings())
-            PartiTheme(settings.theme) {
-                androidx.compose.runtime.CompositionLocalProvider(ru.partitrainer.ui.components.LocalNotation provides settings.notation) { PartiNavHost(vm) }
+            // Подписываемся только на тему и систему записи нот: прочие настройки (ползунки громкости и т.п.) не трогают корень
+            val theme by remember { container.settings.flow.map { it.theme }.distinctUntilChanged() }.collectAsState(initial = Settings().theme)
+            val notation by remember { container.settings.flow.map { it.notation }.distinctUntilChanged() }.collectAsState(initial = Settings().notation)
+            PartiTheme(theme) {
+                androidx.compose.runtime.CompositionLocalProvider(ru.partitrainer.ui.components.LocalNotation provides notation) { PartiNavHost(vm) }
             }
         }
     }

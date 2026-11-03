@@ -65,7 +65,7 @@ fun ScoreView(
     caretColor: Color = MaterialTheme.colorScheme.primary,
 ) {
     val density = LocalDensity.current
-    val tm = rememberTextMeasurer()
+    val tm = rememberTextMeasurer(cacheSize = 512)
     val ink = MaterialTheme.colorScheme.onSurface
     val accent = caretColor
     val hasClefGlyph = remember { android.graphics.Paint().hasGlyph("𝄞") && android.graphics.Paint().hasGlyph("𝄢") }
