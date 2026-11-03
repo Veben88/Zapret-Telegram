@@ -183,4 +183,27 @@ object ImageOps {
         }
         return out
     }
+
+    /** Поворот вокруг центра на [radians] (положительный — наклон линий «вниз вправо» исправляется), белая заливка. */
+    fun rotate(src: GrayImage, radians: Double): GrayImage {
+        val out = GrayImage(src.width, src.height)
+        java.util.Arrays.fill(out.data, 0xFF.toByte())
+        val c = Math.cos(radians); val sn = Math.sin(radians)
+        val cx = (src.width - 1) / 2.0; val cy = (src.height - 1) / 2.0
+        for (y in 0 until src.height) {
+            val dy = y - cy
+            for (x in 0 until src.width) {
+                val dx = x - cx
+                val sx = cx + dx * c - dy * sn
+                val sy = cy + dx * sn + dy * c
+                if (sx < 0 || sy < 0 || sx > src.width - 1 || sy > src.height - 1) continue
+                val x0 = sx.toInt(); val y0 = sy.toInt()
+                val x1 = min(x0 + 1, src.width - 1); val y1 = min(y0 + 1, src.height - 1)
+                val ax = sx - x0; val ay = sy - y0
+                val v = (src[x0, y0] * (1 - ax) + src[x1, y0] * ax) * (1 - ay) + (src[x0, y1] * (1 - ax) + src[x1, y1] * ax) * ay
+                out.data[y * src.width + x] = v.roundToInt().coerceIn(0, 255).toByte()
+            }
+        }
+        return out
+    }
 }

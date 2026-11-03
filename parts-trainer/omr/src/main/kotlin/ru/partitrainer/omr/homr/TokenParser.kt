@@ -44,7 +44,7 @@ object TokenParser {
         var den: Int? = null
         val measures = ArrayList<Builder>()
         var cur = Builder()
-        var volta = 0; var lastVoltaMeasure = -10; var inVolta = false
+        var volta = 0; var lastVoltaStopSize = -10; var inVolta = false
         var prevEvent: Ev? = null
 
         fun closeMeasure() {
@@ -68,15 +68,18 @@ object TokenParser {
                 when {
                     r.startsWith("keySignature_") -> if (fifths == null) fifths = r.substringAfter('_').toIntOrNull()
                     r.startsWith("timeSignature/") -> if (den == null) den = r.substringAfter('/').toIntOrNull()
-                    r == "barline" || r == "doublebarline" || r == "bolddoublebarline" -> { closeMeasure(); prevEvent = null }
+                    r == "barline" || r == "doublebarline" || r == "bolddoublebarline" -> closeMeasure() // лига может пересекать тактовую черту
                     r == "repeatStart" -> { closeMeasure(); cur.repeatStart = true }
                     r == "repeatEnd" -> { cur.repeatEnd = true; closeMeasure() }
                     r == "repeatEndStart" -> { cur.repeatEnd = true; closeMeasure(); cur.repeatStart = true }
                     r.startsWith("voltaStart") -> {
-                        volta = if (measures.size == lastVoltaMeasure + 1) volta + 1 else 1
+                        volta = if (measures.size == lastVoltaStopSize) volta + 1 else 1
                         inVolta = true; cur.ending = volta
                     }
-                    r.startsWith("voltaStop") || r.startsWith("voltaDiscontinue") -> { lastVoltaMeasure = measures.size; inVolta = false }
+                    r.startsWith("voltaStop") || r.startsWith("voltaDiscontinue") -> {
+                        lastVoltaStopSize = measures.size; inVolta = false
+                        if (cur.events.isEmpty()) cur.ending = null
+                    }
                     multiRest.matches(r) -> { /* многотактовая пауза: отдельные такты нам не нужны */ }
                     r.startsWith("note_") || r.startsWith("rest_") -> {
                         val b = beats(r) ?: continue
@@ -95,7 +98,7 @@ object TokenParser {
                 }
             }
             // конец строки: открытый такт с нотами закрываем
-            if (cur.events.isNotEmpty()) { closeMeasure(); prevEvent = null }
+            if (cur.events.isNotEmpty()) closeMeasure()
         }
         if (cur.events.isNotEmpty() || cur.repeatEnd) measures += cur
 

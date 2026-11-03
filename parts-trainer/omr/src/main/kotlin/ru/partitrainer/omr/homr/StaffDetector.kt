@@ -79,6 +79,37 @@ object StaffDetector {
     }
 
     /**
+     * Наклон линеек (dy/dx) по маске нотоносцев: ищем наклон, при котором проекция пикселей на вертикаль
+     * наиболее «острая» (линейки сливаются в узкие пики). Диапазон ±6°.
+     */
+    fun estimateSlope(map: SegMap): Double {
+        val staffCls = SegClass.STAFF.toByte()
+        val xs = ArrayList<Int>(); val ys = ArrayList<Int>()
+        for (y in 0 until map.height step 2) for (x in 0 until map.width step 2) if (map.cls[y * map.width + x] == staffCls) { xs += x; ys += y }
+        if (xs.size < 500) return 0.0
+        val cx = map.width / 2.0
+        val bins = map.height + map.width
+        fun score(t: Double): Double {
+            val h = IntArray(bins)
+            val off = map.width / 2
+            for (i in xs.indices) {
+                val yy = (ys[i] - (xs[i] - cx) * t).toInt() + off
+                if (yy in 0 until bins) h[yy]++
+            }
+            var s = 0.0
+            for (v in h) s += v.toDouble() * v
+            return s
+        }
+        var best = 0.0; var bestScore = score(0.0)
+        var deg = -6.0
+        while (deg <= 6.0) { val t = Math.tan(Math.toRadians(deg)); val sc = score(t); if (sc > bestScore * 1.0001) { bestScore = sc; best = t }; deg += 0.25 }
+        val base = Math.toDegrees(Math.atan(best))
+        var d = base - 0.2
+        while (d <= base + 0.2) { val t = Math.tan(Math.toRadians(d)); val sc = score(t); if (sc > bestScore) { bestScore = sc; best = t }; d += 0.05 }
+        return best
+    }
+
+    /**
      * Группировка нотоносцев в системы: два соседних нотоносца входят в одну систему, если слева
      * их соединяет сплошная вертикальная линия (системная тактовая черта/скобка).
      */

@@ -41,9 +41,18 @@ class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0) : AutoCl
         isCancelled: () -> Boolean = { false },
     ): PageTokens {
         onProgress(0, 1, "Подготовка страницы")
-        val page = ImageOps.clahe(ImageOps.resizeToHomrWidth(gray))
+        var page = ImageOps.clahe(ImageOps.resizeToHomrWidth(gray))
         onProgress(0, 1, "Сегментация нот")
-        val seg = Segnet(env, segSession).segment(page) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") }
+        val segnet = Segnet(env, segSession)
+        fun segment(img: GrayImage) = segnet.segment(img) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") }
+        var seg = segment(page)
+        // Фото могут быть наклонены: выравниваем по линейкам и сегментируем заново
+        val slope = StaffDetector.estimateSlope(seg)
+        if (Math.abs(slope) > 0.005) {
+            onProgress(0, 1, "Выравнивание страницы")
+            page = ImageOps.rotate(page, Math.atan(slope))
+            seg = segment(page)
+        }
         val staves = StaffDetector.detect(seg)
         if (staves.isEmpty()) return PageTokens(0, emptyList(), emptyList(), emptyList())
         val systems = StaffDetector.systems(staves, page)

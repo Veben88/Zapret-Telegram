@@ -101,4 +101,42 @@ class HomrReferenceTest {
             }
         }
     }
+
+    @Test fun accidentalsTiesRepeats() {
+        assumeTrue(models != null && ref != null && File(ref, "cx.png").exists())
+        val gray = loadGray(File(ref, "cx.png"))
+        val truth = ru.partitrainer.core.io.MusicXmlParser.parse(File(ref, "cx.musicxml").inputStream())
+        HomrPipeline(modelFiles()).use { p ->
+            val r = p.recognizePage(gray, StaffDetector.Staff.VOCAL_OR_TOP)
+            println(r.staffs.flatten().joinToString(" | "))
+            val parsed = TokenParser.parse(r.staffs)
+            val asm = ru.partitrainer.core.omr.ClaudeOmr.assemble(parsed)
+            val notes = asm.score.voices.first().notes
+            val exp = truth.score.voices.first().notes
+            println("got ${notes.map { it.midi to it.beats }}\nexp ${exp.map { it.midi to it.beats }}")
+            println("marks got ${asm.marks.map { listOf(it.repeatStart, it.repeatEnd, it.volta) }}")
+            println("marks exp ${truth.marks.map { listOf(it.repeatStart, it.repeatEnd, it.volta) }}")
+            assertEquals(exp.map { it.midi }, notes.map { it.midi })
+            assertEquals(exp.map { it.beats }, notes.map { it.beats })
+            assertEquals(truth.marks.map { Triple(it.repeatStart, it.repeatEnd, it.volta) }, asm.marks.map { Triple(it.repeatStart, it.repeatEnd, it.volta) })
+            // раскрытие повторов на распознанных данных
+            val order = ru.partitrainer.core.structure.Repeats.expandRepeats(asm.marks)
+            println("expand ${order.order} ambiguous=${order.ambiguous} ${order.warnings}")
+            assertEquals(ru.partitrainer.core.structure.Repeats.expandRepeats(truth.marks).order, order.order)
+        }
+    }
+
+    @Test fun skewedNoisyPhoto() {
+        assumeTrue(models != null && ref != null && File(ref, "photo.jpg").exists())
+        val gray = loadGray(File(ref, "photo.jpg"))
+        val truth = ru.partitrainer.core.io.MusicXmlParser.parse(File(ref, "page.musicxml").inputStream()).score.voices.first().notes
+        HomrPipeline(modelFiles()).use { p ->
+            val r = p.recognizePage(gray, StaffDetector.Staff.VOCAL_OR_TOP, onProgress = { _, _, m -> println(m) })
+            val notes = ru.partitrainer.core.omr.ClaudeOmr.assemble(TokenParser.parse(r.staffs)).score.voices.first().notes
+            val same = notes.zip(truth).count { it.first.midi == it.second.midi && it.first.beats == it.second.beats }
+            println("photo: staves=${r.stavesFound} notes=${notes.size}/${truth.size} correct=$same")
+            assertEquals(2, r.stavesFound)
+            assertTrue("correct $same of ${truth.size}", notes.size == truth.size && same >= truth.size * 0.9)
+        }
+    }
 }
