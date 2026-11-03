@@ -23,7 +23,7 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - name: Тесты перед релизом
-        run: ./gradlew :core:test :app:testDebugUnitTest
+        run: ./gradlew :core:test :omr:test :app:testDebugUnitTest
       - name: Восстановить keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}

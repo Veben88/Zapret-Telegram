@@ -40,6 +40,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun update(f: (Settings) -> Settings) = viewModelScope.launch { c.settings.update(f) }
     fun saveKey(k: String) { if (k.isNotBlank()) { c.keyStore.save(k); hasKey.value = true } }
     fun deleteKey() { c.keyStore.delete(); hasKey.value = false }
+    val models get() = c.homrModels
     fun clearCache() = viewModelScope.launch { c.projects.clearCache(); cacheCleared.value = true }
 }
 
@@ -50,6 +51,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val s by vm.settings.collectAsState()
     val hasKey by vm.hasKey.collectAsState()
     val cleared by vm.cacheCleared.collectAsState()
+    val models by vm.models.state.collectAsState()
     var keyInput by remember { mutableStateOf("") }
 
     Scaffold(topBar = {
@@ -60,6 +62,12 @@ fun SettingsScreen(onBack: () -> Unit) {
             Column(Modifier.selectableGroup()) {
                 EngineOption(s.engine == EngineId.ON_DEVICE, R.string.engine_ondevice, R.string.engine_ondevice_desc) { vm.update { it.copy(engine = EngineId.ON_DEVICE) } }
                 EngineOption(s.engine == EngineId.CLAUDE_VISION, R.string.engine_claude, R.string.engine_claude_desc) { vm.update { it.copy(engine = EngineId.CLAUDE_VISION) } }
+            }
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.models_title), style = MaterialTheme.typography.titleSmall)
+                    ru.partitrainer.ui.components.ModelsCard(models, vm.models.downloadSizeMb, vm.models::startDownload, vm.models::cancel, vm.models::delete)
+                }
             }
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

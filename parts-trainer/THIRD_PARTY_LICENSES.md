@@ -13,11 +13,16 @@
 | WorkManager | 2.10.0 | Apache-2.0 | распознавание в фоне |
 | kXML2 (только тесты `:core`) | 2.3.0 | BSD-style (Public Domain / BSD) | парсер XML в JVM-тестах |
 | xmlpull API (compileOnly) | 1.1.3.1 | Public Domain | API парсера; на Android — из платформы |
+| ONNX Runtime (Java / Android) | 1.27.0 | MIT | запуск нейросетей homr |
 | JUnit (только тесты) | 4.13.2 | EPL-1.0 | тесты |
 
 Написано с нуля (без сторонних библиотек): определение высоты тона (YIN), синтезатор на `AudioTrack`, разбор
 MusicXML/MXL (`XmlPullParser`, `ZipInputStream`) и MIDI (SMF), экспорт MIDI/MusicXML, раскрытие повторов.
 
+## Портированный код и скачиваемые модели
+* **homr** (liebharc/homr) — AGPL-3.0: алгоритмы препроцессинга, сегментации, подготовки строк и словарь токенов портированы на Kotlin (модуль `:omr`); проект распространяется под AGPL-3.0.
+* **Модели homr** (segnet, encoder, decoder; ONNX) — AGPL-3.0, скачиваются пользователем по запросу с GitHub, в APK не входят. Обучающие данные включают наборы с разными лицензиями (в т.ч. PrIMuS — CC BY-NC 4.0 на Hugging Face); статус для коммерческой публикации не выяснен.
+
 ## Не включено намеренно
 * **TarsosDSP** — GPL-3.0 (определение высоты написано самостоятельно).
-* **homr / Andromr** — AGPL-3.0, с лицензией проекта совместимы, но порт ещё не сделан (см. `docs/OMR_ON_DEVICE.md`).
+* **Andromr** — Python/Kivy-приложение, не используется.

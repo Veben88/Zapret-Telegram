@@ -57,6 +57,8 @@ ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":omr"))
+    implementation(libs.onnxruntime.android)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

@@ -10,6 +10,7 @@ import ru.partitrainer.data.PartiDatabase
 import ru.partitrainer.data.ProjectRepository
 import ru.partitrainer.data.SecureKeyStore
 import ru.partitrainer.data.SettingsRepository
+import ru.partitrainer.omr.HomrModelManager
 import ru.partitrainer.util.SourceFiles
 
 /** Ручной DI: один контейнер на процесс. */
@@ -20,6 +21,7 @@ class AppContainer(val context: Context) {
     val keyStore: SecureKeyStore by lazy { SecureKeyStore(context) }
     val sources: SourceFiles by lazy { SourceFiles(context) }
     val importer: Importer by lazy { Importer(sources, projects) }
+    val homrModels: HomrModelManager by lazy { HomrModelManager(context) }
     val synth: Synth by lazy { Synth() }
     val playback: PlaybackEngine by lazy { PlaybackEngine(context, synth) }
 }

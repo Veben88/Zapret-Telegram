@@ -18,7 +18,7 @@ enum class Timbre { PIANO, AAH }
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 data class Settings(
-    val engine: EngineId = EngineId.CLAUDE_VISION,
+    val engine: EngineId = EngineId.ON_DEVICE,
     val notation: Notation = Notation.SOLFEGE,
     val timbre: Timbre = Timbre.PIANO,
     val theme: ThemeMode = ThemeMode.SYSTEM,

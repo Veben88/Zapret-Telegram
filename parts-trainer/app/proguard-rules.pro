@@ -6,3 +6,7 @@
 -keepclassmembers class ru.partitrainer.core.** { *** Companion; }
 # XmlPullParser живёт в платформе Android
 -dontwarn org.xmlpull.v1.**
+
+# ONNX Runtime (JNI)
+-keep class ai.onnxruntime.** { *; }
+-dontwarn ai.onnxruntime.**

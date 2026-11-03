@@ -111,7 +111,7 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
     /** Запускает задание; возвращает id работы или null, если нужно подтверждение/ошибка. */
     suspend fun start(): String? {
         val s = c.settings.flow.first()
-        val engine: OmrEngine = if (s.engine == EngineId.ON_DEVICE) HomrOnDeviceEngine() else ClaudeVisionEngine { c.keyStore.load() }
+        val engine: OmrEngine = if (s.engine == EngineId.ON_DEVICE) HomrOnDeviceEngine(c.homrModels) else ClaudeVisionEngine { c.keyStore.load() }
         (engine.availability() as? Availability.Unavailable)?.let { error.value = it.reason; return null }
         val pages = selected.value.sorted()
         if (pages.isEmpty()) { error.value = "Выберите хотя бы одну страницу"; return null }
@@ -123,6 +123,8 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
         val page = selected.value.minOrNull() ?: 0
         return c.importer.createManualFromSource(path, hash, name, isPdf, page, rotations.value[page] ?: 0)
     }
+
+    val models get() = c.homrModels
 
     suspend fun acceptWarning() = c.settings.update { it.copy(claudeWarningAccepted = true) }
 
@@ -144,6 +146,7 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
     val settings by vm.settings.collectAsState()
     val hasKey by vm.hasKey.collectAsState()
     val error by vm.error.collectAsState()
+    val models by vm.models.state.collectAsState()
     val scope = rememberCoroutineScope()
     var warn by remember { mutableStateOf(false) }
 
@@ -223,11 +226,11 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
                 }
             }
 
-            EngineCard(settings, hasKey, vm, onSettings)
+            EngineCard(settings, hasKey, vm, models, onSettings)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Button(
                 onClick = { if (settings.engine == EngineId.CLAUDE_VISION && !settings.claudeWarningAccepted) warn = true else go() },
-                enabled = selected.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                enabled = selected.isNotEmpty() && (settings.engine != EngineId.ON_DEVICE || models == ru.partitrainer.omr.ModelState.Ready), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             ) { Text(stringResource(R.string.start_recognition)) }
             OutlinedButton(
                 onClick = { scope.launch { onManual(vm.manualEntry()) } },
@@ -247,7 +250,7 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
 }
 
 @Composable
-private fun EngineCard(s: Settings, hasKey: Boolean, vm: PrepareViewModel, onSettings: () -> Unit) {
+private fun EngineCard(s: Settings, hasKey: Boolean, vm: PrepareViewModel, models: ru.partitrainer.omr.ModelState, onSettings: () -> Unit) {
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(stringResource(R.string.engine_label), style = MaterialTheme.typography.labelMedium)
@@ -258,7 +261,7 @@ private fun EngineCard(s: Settings, hasKey: Boolean, vm: PrepareViewModel, onSet
                 if (!hasKey) Text(stringResource(R.string.no_key_hint), color = MaterialTheme.colorScheme.error)
             } else {
                 Text(stringResource(R.string.engine_ondevice), style = MaterialTheme.typography.titleSmall)
-                Text(stringResource(R.string.ondevice_unavailable), color = MaterialTheme.colorScheme.error)
+                ru.partitrainer.ui.components.ModelsCard(models, vm.models.downloadSizeMb, vm.models::startDownload, vm.models::cancel)
             }
             TextButton(onClick = onSettings) { Text(stringResource(R.string.change_engine)) }
         }

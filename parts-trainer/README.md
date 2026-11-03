@@ -11,13 +11,14 @@
 | `:core` (чистый Kotlin/JVM): модель, парсеры MusicXML/MXL/MIDI, экспорт, раскрытие повторов, определение голосов, YIN, оценка пения, разбор ответов Claude, правки с undo/redo | **Готово, 63 юнит-теста проходят** (`gradle -c settings-core.gradle.kts :core:test`) |
 | `:app` (Android, Compose, Room, DataStore, WorkManager, AudioTrack, AudioRecord) | Написано целиком, **но не собиралось в среде разработки**: из неё недоступен Google Maven/Android SDK. Первая сборка в CI или Android Studio может потребовать мелких правок компиляции |
 | Движок «Claude Vision» | Реализован (запросы, повторы, проверка сумм тактов, отмена, оценка стоимости) |
-| Движок «На устройстве» (homr) | **Пробный этап не пройден**, интерфейс готов, движок отмечен «недоступен» — причины в [docs/OMR_ON_DEVICE.md](docs/OMR_ON_DEVICE.md) (Andromr — Python/Kivy, а не Android-библиотека; homr/Andromr — AGPL-3.0) |
+| Движок «На устройстве» (homr) | **Реализован**: порт конвейера на Kotlin (модуль `:omr`, проверен против Python-homr на синтетических страницах и «испорченном» фото) + ONNX Runtime; модели (~140 МБ) скачиваются по запросу. Скорость на телефоне и реальные сканы ещё не проверены — [docs/OMR_ON_DEVICE.md](docs/OMR_ON_DEVICE.md) |
 | Встроенный пример «Верхом на звезде» | Готово (данные в `core/.../BuiltinSong.kt`, помечен «пример, возможны неточности») |
 
 ## Структура
 
 ```
 parts-trainer/
+├── omr/       порт homr на Kotlin (JVM) + ONNX Runtime, сверка с Python
 ├── core/      чистый Kotlin (JVM): model, music, io, voices, structure, omr, audio, edit  + тесты
 ├── app/       Android: data (Room/DataStore/Keystore), audio (Synth/Playback/Mic), omr (движки, PdfRenderer, WorkManager), ui (Compose)
 ├── docs/      OMR_ON_DEVICE.md

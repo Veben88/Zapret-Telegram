@@ -96,7 +96,7 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
         }
 
         val engine: OmrEngine = when (job.engine) {
-            EngineId.ON_DEVICE -> HomrOnDeviceEngine()
+            EngineId.ON_DEVICE -> HomrOnDeviceEngine(c.homrModels)
             EngineId.CLAUDE_VISION -> ClaudeVisionEngine { c.keyStore.load() }
         }
         (engine.availability() as? Availability.Unavailable)?.let {

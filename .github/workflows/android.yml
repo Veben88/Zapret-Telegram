@@ -27,7 +27,7 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - name: Юнит-тесты (core + app)
-        run: ./gradlew :core:test :app:testDebugUnitTest --stacktrace
+        run: ./gradlew :core:test :omr:test :app:testDebugUnitTest --stacktrace
       - name: Lint
         run: ./gradlew :app:lintDebug --stacktrace
       - name: Отладочный APK
@@ -38,6 +38,7 @@ jobs:
           name: reports
           path: |
             parts-trainer/core/build/reports/tests
+            parts-trainer/omr/build/reports/tests
             parts-trainer/app/build/reports/tests
             parts-trainer/app/build/reports/lint-results-debug.html
       - uses: actions/upload-artifact@v4
