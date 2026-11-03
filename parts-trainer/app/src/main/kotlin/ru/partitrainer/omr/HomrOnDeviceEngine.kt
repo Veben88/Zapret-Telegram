@@ -44,14 +44,14 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
         val tokens = ArrayList<List<EncodedSymbol>>()
         try {
             withContext(Dispatchers.Default) {
-                HomrPipeline(files).use { pipeline ->
+                HomrPipeline(files, threads = CpuTopology.performanceThreads()).use { pipeline ->
                     for ((i, page) in request.pages.withIndex()) {
                         ctx.ensureActive()
                         onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: подготовка"))
                         val bmp = request.provider.render(page)
                         val gray = try { toGray(bmp) } finally { bmp.recycle() }
                         val r = pipeline.recognizePage(
-                            gray, sel,
+                            gray, sel, accurate = request.accurate,
                             onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) },
                             isCancelled = { !ctx.isActive },
                         )
@@ -89,10 +89,10 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
                         ctx.ensureActive()
                         val systems = choirPages[page] ?: run {
                             onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: подготовка"))
-                            val p = pipeline ?: HomrPipeline(files).also { pipeline = it }
+                            val p = pipeline ?: HomrPipeline(files, threads = CpuTopology.performanceThreads()).also { pipeline = it }
                             val bmp = request.provider.render(page)
                             val gray = try { toGray(bmp) } finally { bmp.recycle() }
-                            p.recognizeAll(gray, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive })
+                            p.recognizeAll(gray, accurate = request.accurate, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive })
                                 .also { choirPages[page] = it }
                         }
                         if (request.twoStaffChoir) {

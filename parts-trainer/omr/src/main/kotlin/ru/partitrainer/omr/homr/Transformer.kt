@@ -51,6 +51,9 @@ class Staff2Score(
         const val STD = 0.1738
     }
 
+    /** Профилирование: суммарное время энкодера/декодера (мс) и число шагов декодера. */
+    @Volatile var encoderMs = 0L; @Volatile var decoderMs = 0L; @Volatile var steps = 0
+
     private val cacheIn = (0 until DEPTH * 4).map { "cache_in$it" }
     private val cacheOut = (0 until DEPTH * 4).map { "cache_out$it" }
     private val outNames = listOf("out_rhythms", "out_pitchs", "out_lifts", "out_positions", "out_articulations", "out_slurs", "attention") + cacheOut
@@ -62,7 +65,9 @@ class Staff2Score(
         require(canvas.width == WIDTH && canvas.height == HEIGHT)
         val x = FloatArray(HEIGHT * WIDTH) { (((canvas.data[it].toInt() and 0xFF) / 255.0 - MEAN) / STD).toFloat() }
         val ctxTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(x), longArrayOf(1, 1, HEIGHT.toLong(), WIDTH.toLong()))
+        val te = System.nanoTime()
         val ctxResult = ctxTensor.use { encoder.run(mapOf(encoder.inputNames.first() to it)) }
+        encoderMs += (System.nanoTime() - te) / 1_000_000
         ctxResult.use { encRes ->
             val ctx = encRes[0] as OnnxTensor
             val ctxShape = ctx.info.shape                      // [1, N, 512]
@@ -71,9 +76,11 @@ class Staff2Score(
             val reduced = full.copyOfRange(0, dim)            // context[:, :1]
             val fullTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(full), ctxShape)
             val redTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(reduced), longArrayOf(1, 1, dim.toLong()))
+            val td = System.nanoTime()
             try {
                 return decode(fullTensor, redTensor, isCancelled)
             } finally {
+                decoderMs += (System.nanoTime() - td) / 1_000_000
                 fullTensor.close(); redTensor.close()
             }
         }
@@ -115,6 +122,7 @@ class Staff2Score(
                 val r = argmaxLast(0); val p = argmaxLast(1); val l = argmaxLast(2)
                 val pos = argmaxLast(3); val a = argmaxLast(4); val s = argmaxLast(5)
                 if (r == EOS) break
+                steps++
                 symbols += EncodedSymbol(vocab.rhythm[r], vocab.pitch[p], vocab.lift[l], vocab.articulation[a], vocab.slur[s], vocab.position[pos])
                 rhythm = r.toLong(); pitch = p.toLong(); lift = l.toLong(); art = a.toLong(); slur = s.toLong()
             }

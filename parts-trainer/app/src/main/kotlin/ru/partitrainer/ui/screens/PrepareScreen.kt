@@ -116,7 +116,7 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
         (engine.availability() as? Availability.Unavailable)?.let { error.value = it.reason; return null }
         val pages = selected.value.sorted()
         if (pages.isEmpty()) { error.value = "Выберите хотя бы одну страницу"; return null }
-        val job = OmrJob(path, hash, isPdf, name, pages, pages.map { rotations.value[it] ?: 0 }, staff.value, s.engine, twoStaff.value)
+        val job = OmrJob(path, hash, isPdf, name, pages, pages.map { rotations.value[it] ?: 0 }, staff.value, s.engine, twoStaff.value, s.omrAccurate)
         return OmrJob.enqueue(c.context, job).toString()
     }
 

@@ -193,4 +193,6 @@
     <string name="staff_choir_all">Хор: все четыре голоса (S, A, T, B)</string>
     <string name="choir_two_staff">Хор на двух строках + фортепиано</string>
     <string name="choir_two_staff_hint">SA на верхней строке и TB на нижней (дивизи), под ними фортепиано. Верхний голос строки — S (T), нижний — A (B).</string>
+    <string name="omr_accurate">Точный режим (на устройстве)</string>
+    <string name="omr_accurate_hint">Использует нейросеть для поиска линеек: медленнее на ≈ 30 %, но надёжнее на сильно изогнутых фото (разворот книги). Обычно не нужен.</string>
 </resources>

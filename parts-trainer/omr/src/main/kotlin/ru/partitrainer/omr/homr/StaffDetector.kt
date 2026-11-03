@@ -308,25 +308,28 @@ object StaffDetector {
         if (ys1 - ys0 < 4) return true
         // вертикаль (системная черта / скобка) может быть чуть левее или правее начала линеек и слегка наклонена
         var best = 0.0
-        for (xc in (xl.toInt() - 18)..(xl.toInt() + 14)) {
+        for (xc in (xl.toInt() - 110)..(xl.toInt() + 60)) {
             if (xc < 1 || xc >= page.width - 1) continue
             var covered = 0
             for (y in ys0 until ys1) {
-                if (page[xc - 1, y] < 160 || page[xc, y] < 160 || page[xc + 1, y] < 160) covered++
+                if (page[xc - 1, y] < 195 || page[xc, y] < 195 || page[xc + 1, y] < 195) covered++
             }
             best = max(best, covered.toDouble() / (ys1 - ys0))
         }
-        return best >= 0.88
+        return best >= 0.85
     }
 
     /**
      * Доля тёмных пикселей под началом нотоносца, где в «теноровом» скрипичном ключе стоит маленькая «8».
      * Область: сразу под нижней линейкой, справа от ключа, выше следующего нотоносца.
      */
-    fun octaveMarkScore(page: GrayImage, staff: DetectedStaff, nextStaffTop: Int?): Double {
+    private const val OCT_X0 = 1.0
+    private const val OCT_X1 = 3.2
+
+    fun octaveMarkScore(page: GrayImage, staff: DetectedStaff, nextStaffTop: Int?, leftX: Double = staff.minX.toDouble()): Double {
         val u = staff.unit
-        val x0 = (staff.minX + 0.3 * u).toInt(); val x1 = (staff.minX + 3.8 * u).toInt()
-        val xl = staff.minX + 2 * u                         // линейки в начале строки (с учётом наклона)
+        val x0 = (leftX + OCT_X0 * u).toInt(); val x1 = (leftX + OCT_X1 * u).toInt()
+        val xl = leftX + 2 * u                         // линейки в начале строки (с учётом наклона)
         val y0 = (staff.bottomAt(xl) + 1.5 * u).toInt()
         var y1 = (staff.bottomAt(xl) + 3.2 * u).toInt()
         if (nextStaffTop != null) y1 = min(y1, (nextStaffTop - 0.4 * u).toInt())

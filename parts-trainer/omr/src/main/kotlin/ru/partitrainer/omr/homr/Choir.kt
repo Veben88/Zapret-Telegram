@@ -13,6 +13,8 @@ class StaffRead(
     /** Скрипичный ключ с маленькой «8» (тенор): звучит на октаву ниже написанного. */
     val octave8: Boolean,
     val medianMidi: Int?,
+    /** Доля тёмных пикселей в области «8» (диагностика). */
+    val octaveScore: Double = 0.0,
 )
 
 /**

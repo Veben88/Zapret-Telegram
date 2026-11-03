@@ -26,7 +26,7 @@ class PageTokens(
  * Конвейер homr на Kotlin: подготовка страницы → segnet → нотоносцы → трансформер.
  * Упрощения относительно оригинала: нет автообрезки фото и выпрямления линеек (страницы PDF прямые).
  */
-class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0) : AutoCloseable {
+class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0, private val staffWorkers: Int = defaultWorkers()) : AutoCloseable {
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val opts = OrtSession.SessionOptions().apply { if (threads > 0) setIntraOpNumThreads(threads) }
     private val segSession by lazy { env.createSession(files.segnet.path, opts) }
@@ -34,38 +34,68 @@ class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0) : AutoCl
     private val decSession by lazy { env.createSession(files.decoder.path, opts) }
     private val vocab = HomrVocab.fromResources()
 
+    /** Время этапов последней страницы, мс (для профилирования и тестов). */
+    val timings = LinkedHashMap<String, Long>()
+    @Volatile var lastS2s: Staff2Score? = null
+    /** Использовался ли быстрый поиск линеек без нейросети (последняя страница). */
+    @Volatile var usedClassic = false
+    private inline fun <T> timed(name: String, block: () -> T): T {
+        val t0 = System.nanoTime()
+        try { return block() } finally { timings[name] = (timings[name] ?: 0L) + (System.nanoTime() - t0) / 1_000_000 }
+    }
+
+    /** Результат поиска нотоносцев: выровненная страница, нотоносцы и системы. */
+    class Located(val page: GrayImage, val staves: List<DetectedStaff>, val systems: List<List<DetectedStaff>>)
+
+    /**
+     * Находит нотоносцы. Быстрый путь — без нейросети (выравнивание по тёмным пикселям + поиск длинных тонких линий);
+     * если так ничего не найдено или включён [accurate], используется нейросеть сегментации.
+     */
+    fun locate(
+        gray: GrayImage, accurate: Boolean,
+        onProgress: (done: Int, total: Int, message: String) -> Unit, isCancelled: () -> Boolean,
+    ): Located {
+        var page = timed("prep") { ImageOps.clahe(ImageOps.resizeToHomrWidth(gray)) }
+        if (!accurate) {
+            val located = timed("classic") {
+                val dark = ClassicStaffMask.dark(page)
+                val slope = ClassicStaffMask.estimateSlope(dark, page.width, page.height)
+                val p = if (Math.abs(slope) > 0.005) ImageOps.rotate(page, Math.atan(slope)) else page
+                val d = if (p === page) dark else ClassicStaffMask.dark(p)
+                val staves = StaffDetector.detect(ClassicStaffMask.mask(p, d))
+                if (staves.isEmpty()) null else Located(p, staves, StaffDetector.systems(staves, p))
+            }
+            if (located != null) { usedClassic = true; return located }
+        }
+        usedClassic = false
+        onProgress(0, 1, "Сегментация нот")
+        val segnet = Segnet(env, segSession)
+        fun segment(img: GrayImage) = timed("segnet") { segnet.segment(img) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") } }
+        var seg = segment(page)
+        val slope = timed("deskew") { StaffDetector.estimateSlope(seg) }
+        if (Math.abs(slope) > 0.005) timed("deskew") { page = ImageOps.rotate(page, Math.atan(slope)); seg = seg.rotated(Math.atan(slope)) }
+        val staves = timed("detect") { StaffDetector.detect(seg) }
+        return Located(page, staves, if (staves.isEmpty()) emptyList() else StaffDetector.systems(staves, page))
+    }
+
     /** Шаги: сегментация (0..1), затем по одному на нотоносец. */
     fun recognizePage(
         gray: GrayImage, selection: StaffDetector.Staff,
         /** Если задан — номер нотоносца в системе (0 — верхний), вместо [selection]. Нужен для хоровых партитур S/A/T/B. */
         staffInSystem: Int? = null,
+        accurate: Boolean = false,
         onProgress: (done: Int, total: Int, message: String) -> Unit = { _, _, _ -> },
         isCancelled: () -> Boolean = { false },
     ): PageTokens {
+        timings.clear()
         onProgress(0, 1, "Подготовка страницы")
-        var page = ImageOps.clahe(ImageOps.resizeToHomrWidth(gray))
-        onProgress(0, 1, "Сегментация нот")
-        val segnet = Segnet(env, segSession)
-        fun segment(img: GrayImage) = segnet.segment(img) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") }
-        var seg = segment(page)
-        // Фото могут быть наклонены: выравниваем по линейкам и сегментируем заново
-        val slope = StaffDetector.estimateSlope(seg)
-        if (Math.abs(slope) > 0.005) {
-            onProgress(0, 1, "Выравнивание страницы")
-            page = ImageOps.rotate(page, Math.atan(slope))
-            seg = segment(page)
-        }
-        val staves = StaffDetector.detect(seg)
+        val loc = locate(gray, accurate, onProgress, isCancelled)
+        val page = loc.page; val staves = loc.staves; val systems = loc.systems
         if (staves.isEmpty()) return PageTokens(0, emptyList(), emptyList(), emptyList())
-        val systems = StaffDetector.systems(staves, page)
         val chosen = systems.mapNotNull { sys -> (staffInSystem?.takeIf { it < sys.size } ?: if (staffInSystem != null) null else StaffDetector.indexInSystem(selection, sys.size))?.let { sys[it] } }
         val s2s = Staff2Score(env, encSession, decSession, vocab)
-        val result = ArrayList<List<EncodedSymbol>>()
-        for ((i, st) in chosen.withIndex()) {
-            if (isCancelled()) throw InterruptedException("Отменено")
-            onProgress(i, chosen.size, "Чтение нотоносца ${i + 1} из ${chosen.size}")
-            result += s2s.predict(staffCanvas(page, st, staves), isCancelled)
-        }
+        val canvases = chosen.map { st -> staffCanvas(page, st, staves) }
+        val result = predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, chosen.size, "Чтение нотоносца $done из ${chosen.size}") }
         onProgress(chosen.size, chosen.size, "Страница готова")
         return PageTokens(staves.size, result, staves, chosen)
     }
@@ -75,39 +105,67 @@ class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0) : AutoCl
      */
     fun recognizeAll(
         gray: GrayImage,
+        accurate: Boolean = false,
         onProgress: (done: Int, total: Int, message: String) -> Unit = { _, _, _ -> },
         isCancelled: () -> Boolean = { false },
     ): List<List<StaffRead>> {
+        timings.clear()
         onProgress(0, 1, "Подготовка страницы")
-        var page = ImageOps.clahe(ImageOps.resizeToHomrWidth(gray))
-        val segnet = Segnet(env, segSession)
-        fun segment(img: GrayImage) = segnet.segment(img) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") }
-        var seg = segment(page)
-        val slope = StaffDetector.estimateSlope(seg)
-        if (Math.abs(slope) > 0.005) { page = ImageOps.rotate(page, Math.atan(slope)); seg = segment(page) }
-        val staves = StaffDetector.detect(seg)
+        val loc = locate(gray, accurate, onProgress, isCancelled)
+        val page = loc.page; val staves = loc.staves; val systems = loc.systems
         if (staves.isEmpty()) return emptyList()
-        val systems = StaffDetector.systems(staves, page)
         val s2s = Staff2Score(env, encSession, decSession, vocab)
+        lastS2s = s2s
         val total = staves.size
-        var done = 0
+        val jobs = ArrayList<Triple<Int, Int, DetectedStaff>>()           // система, номер в системе, нотоносец
+        for ((si, sys) in systems.withIndex()) for ((i, st) in sys.withIndex()) jobs += Triple(si, i, st)
+        val canvases = jobs.map { (_, _, st) -> timed("canvas") { staffCanvas(page, st, staves) } }
+        val allTokens = timed("transformer") {
+            predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, total, "Чтение нотоносца $done из $total") }
+        }
         val out = ArrayList<List<StaffRead>>()
         for ((si, sys) in systems.withIndex()) {
             val reads = ArrayList<StaffRead>()
             for ((i, st) in sys.withIndex()) {
-                if (isCancelled()) throw InterruptedException("Отменено")
-                onProgress(done, total, "Чтение нотоносца ${done + 1} из $total")
-                val tokens = s2s.predict(staffCanvas(page, st, staves), isCancelled)
+                val tokens = allTokens[jobs.indexOfFirst { it.third === st }]
                 val clef = tokens.firstOrNull { it.rhythm.startsWith("clef_") }?.rhythm?.getOrNull(5)
                 val notes = tokens.filter { it.rhythm.startsWith("note_") }.mapNotNull { TokenParser.midi(it.pitch, it.lift) }.sorted()
-                val oct = StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY) > OCTAVE_MARK_THRESHOLD
-                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2))
-                done++
+                // начало строк в системе выровнено — берём медиану (в сканах край отдельной строки «плавает»)
+                val leftEdge = sys.map { it.minX }.sorted().let { it[it.size / 2] }.toDouble()
+                val octScore = StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
+                val oct = octScore > OCTAVE_MARK_THRESHOLD
+                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore)
             }
             out += reads
         }
         onProgress(total, total, "Страница готова")
         return out
+    }
+
+    /**
+     * Читает нотоносцы (энкодер+декодер) в нескольких потоках: шаг декодера — много мелких операций, одному потоку
+     * ядра не загрузить. Сессии ONNX Runtime потокобезопасны. Порядок результатов сохраняется.
+     */
+    private fun predictAll(
+        s2s: Staff2Score, canvases: List<GrayImage>, isCancelled: () -> Boolean, onDone: (Int) -> Unit,
+    ): List<List<EncodedSymbol>> {
+        if (canvases.isEmpty()) return emptyList()
+        val workers = staffWorkers.coerceIn(1, canvases.size)
+        val done = java.util.concurrent.atomic.AtomicInteger(0)
+        if (workers == 1) return canvases.map { c ->
+            if (isCancelled()) throw InterruptedException("Отменено")
+            s2s.predict(c, isCancelled).also { onDone(done.incrementAndGet()) }
+        }
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(workers) { r -> Thread(r, "homr-staff").also { it.isDaemon = true } }
+        try {
+            val futures = canvases.map { c -> pool.submit<List<EncodedSymbol>> {
+                if (isCancelled()) throw InterruptedException("Отменено")
+                s2s.predict(c, isCancelled).also { onDone(done.incrementAndGet()) }
+            } }
+            return futures.map {
+                try { it.get() } catch (e: java.util.concurrent.ExecutionException) { throw (e.cause ?: e) }
+            }
+        } finally { pool.shutdownNow() }
     }
 
     override fun close() {
@@ -116,8 +174,14 @@ class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0) : AutoCl
     }
 
     companion object {
-        /** Порог доли тёмных пикселей под ключом для признака «8» (измерено на хоровой партитуре: тенор 0,04–0,06, остальные ≤ 0,03). */
-        const val OCTAVE_MARK_THRESHOLD = 0.035
+        /** Порог доли тёмных пикселей под ключом для признака «8»: по 82 тенорам и 164 другим строкам тенор ≥ 0,035 (медиана 0,086), остальные ≤ 0,049. */
+        const val OCTAVE_MARK_THRESHOLD = 0.05
+
+        /**
+         * Число потоков чтения нотоносцев. По замерам параллельное чтение не ускоряет: энкодер уже занимает все ядра,
+         * а второй поток только конкурирует за них и память. Поэтому по умолчанию один.
+         */
+        fun defaultWorkers(): Int = 1
 
         /** Изображение строки для трансформера: 256×1280, белый фон, область по правилам homr (prepare_staff_image). */
         fun staffCanvas(page: GrayImage, staff: DetectedStaff, all: List<DetectedStaff>): GrayImage {

@@ -30,6 +30,8 @@ data class Settings(
     val countIn: Boolean = true,
     val measuresPerPhrase: Int = 2,
     val claudeWarningAccepted: Boolean = false,
+    /** Точный режим распознавания на устройстве: нейросеть сегментации вместо быстрого поиска линеек (медленнее, надёжнее на изогнутых фото). */
+    val omrAccurate: Boolean = false,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -48,6 +50,7 @@ class SettingsRepository(private val context: Context) {
         val countIn = booleanPreferencesKey("count_in")
         val phrase = intPreferencesKey("measures_per_phrase")
         val warned = booleanPreferencesKey("claude_warned")
+        val accurate = booleanPreferencesKey("omr_accurate")
     }
 
     val flow: Flow<Settings> = context.dataStore.data.map { snapshot(it) }
@@ -59,7 +62,7 @@ class SettingsRepository(private val context: Context) {
             p[K.engine] = n.engine.name; p[K.notation] = n.notation.name; p[K.timbre] = n.timbre.name
             p[K.theme] = n.theme.name; p[K.tolerance] = n.toleranceCents; p[K.octave] = n.matchOctave
             p[K.volume] = n.volume; p[K.other] = n.otherVoicesVolume; p[K.playOthers] = n.playOthers
-            p[K.countIn] = n.countIn; p[K.phrase] = n.measuresPerPhrase; p[K.warned] = n.claudeWarningAccepted
+            p[K.countIn] = n.countIn; p[K.phrase] = n.measuresPerPhrase; p[K.warned] = n.claudeWarningAccepted; p[K.accurate] = n.omrAccurate
         }
     }
 
@@ -78,6 +81,7 @@ class SettingsRepository(private val context: Context) {
             countIn = p[K.countIn] ?: d.countIn,
             measuresPerPhrase = p[K.phrase] ?: d.measuresPerPhrase,
             claudeWarningAccepted = p[K.warned] ?: d.claudeWarningAccepted,
+            omrAccurate = p[K.accurate] ?: d.omrAccurate,
         )
     }
 }

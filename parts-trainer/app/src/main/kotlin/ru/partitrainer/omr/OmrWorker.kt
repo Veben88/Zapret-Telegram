@@ -32,19 +32,20 @@ data class OmrJob(
     val filePath: String, val hash: String, val isPdf: Boolean, val title: String,
     val pages: List<Int>, val rotations: List<Int>, val staff: StaffSelection, val engine: EngineId,
     val twoStaffChoir: Boolean = false,
+    val accurate: Boolean = false,
 ) {
-    fun cacheKey() = "$hash|${engine.name}|${pages.zip(rotations).joinToString(",") { "${it.first}r${it.second}" }}|${staff.key}${if (twoStaffChoir) "|2s" else ""}"
+    fun cacheKey() = "$hash|${engine.name}|${pages.zip(rotations).joinToString(",") { "${it.first}r${it.second}" }}|${staff.key}${if (twoStaffChoir) "|2s" else ""}${if (accurate) "|acc" else ""}"
 
     fun toData(): Data = workDataOf(
         "path" to filePath, "hash" to hash, "pdf" to isPdf, "title" to title,
-        "pages" to pages.toIntArray(), "rot" to rotations.toIntArray(), "staff" to staff.key, "engine" to engine.name, "twoStaff" to twoStaffChoir,
+        "pages" to pages.toIntArray(), "rot" to rotations.toIntArray(), "staff" to staff.key, "engine" to engine.name, "twoStaff" to twoStaffChoir, "accurate" to accurate,
     )
 
     companion object {
         fun from(d: Data) = OmrJob(
             d.getString("path")!!, d.getString("hash")!!, d.getBoolean("pdf", true), d.getString("title") ?: "Без названия",
             d.getIntArray("pages")!!.toList(), d.getIntArray("rot")!!.toList(), StaffSelection.fromKey(d.getString("staff")),
-            EngineId.valueOf(d.getString("engine")!!), d.getBoolean("twoStaff", false),
+            EngineId.valueOf(d.getString("engine")!!), d.getBoolean("twoStaff", false), d.getBoolean("accurate", false),
         )
         const val TAG = "omr"
         const val KEY_PROJECT = "projectId"
@@ -112,7 +113,7 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
             var base: ClaudeOmr.Assembled? = null
             try {
                 for ((si, staff) in staffs.withIndex()) {
-                    val parsed = engine.recognize(OmrRequest(job.pages, staff, { p -> renderer.render(p, rotByPage[p] ?: 0) }, job.twoStaffChoir)) { pr ->
+                    val parsed = engine.recognize(OmrRequest(job.pages, staff, { p -> renderer.render(p, rotByPage[p] ?: 0) }, job.twoStaffChoir, job.accurate)) { pr ->
                         val done = si * job.pages.size + pr.done
                         // Сообщение о ходе работы и счётчики (setProgress в корутине — через launch не нужен: вызываем из колбэка синхронно)
                         publish(done, totalUnits, pr.message)

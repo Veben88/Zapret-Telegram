@@ -351,4 +351,135 @@ class HomrReferenceTest {
             }
         }
     }
+
+    @Test fun profile() {
+        val dir = System.getenv("HOMR_SURVEY")?.takeIf { it.isNotBlank() }?.let(::File)
+        val pages = System.getenv("HOMR_PAGES")?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+        assumeTrue(models != null && dir != null && pages.isNotEmpty() && System.getenv("HOMR_PROFILE") == "1")
+        val t0 = System.currentTimeMillis()
+        HomrPipeline(modelFiles()).use { p ->
+            println("PROF session init ${System.currentTimeMillis() - t0} ms")
+            for (name in pages) {
+                val gray = loadGray(File(dir, "$name.png"))
+                val s = System.currentTimeMillis()
+                val r = p.recognizeAll(gray)
+                println("PROF $name total=${System.currentTimeMillis() - s} ms staves=${r.sumOf { it.size }} " + p.timings.entries.joinToString(" ") { "${it.key}=${it.value}" } + " enc=${p.lastS2s?.encoderMs} dec=${p.lastS2s?.decoderMs} steps=${p.lastS2s?.steps}")
+            }
+        }
+    }
+
+    @Test fun loadTimeExperiment() {
+        assumeTrue(models != null && System.getenv("HOMR_LOAD") == "1")
+        val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+        val mf = modelFiles()
+        val tmp = File(System.getProperty("java.io.tmpdir"), "homr_opt").apply { mkdirs() }
+        for (f in listOf(mf.segnet, mf.encoder, mf.decoder)) {
+            var t = System.nanoTime()
+            env.createSession(f.path, ai.onnxruntime.OrtSession.SessionOptions()).close()
+            val plain = (System.nanoTime() - t) / 1_000_000
+            val optFile = File(tmp, f.name)
+            optFile.delete()
+            t = System.nanoTime()
+            ai.onnxruntime.OrtSession.SessionOptions().use { o ->
+                o.setOptimizedModelFilePath(optFile.path)
+                env.createSession(f.path, o).close()
+            }
+            val saveMs = (System.nanoTime() - t) / 1_000_000
+            t = System.nanoTime()
+            ai.onnxruntime.OrtSession.SessionOptions().use { o ->
+                o.setOptimizationLevel(ai.onnxruntime.OrtSession.SessionOptions.OptLevel.NO_OPT)
+                env.createSession(optFile.path, o).close()
+            }
+            val fast = (System.nanoTime() - t) / 1_000_000
+            println("LOAD ${f.name.take(10)} plain=$plain ms, save=$saveMs ms, fromOptimized=$fast ms, size ${f.length() / 1_000_000}->${optFile.length() / 1_000_000} MB")
+        }
+    }
+
+    /** Быстрый поиск линеек (без нейросети) против нейросетевого на множестве страниц: HOMR_FAST=dir:name,name;dir:name... */
+    @Test fun fastVsAccurateLocate() {
+        val spec = System.getenv("HOMR_FAST")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        var same = 0; var total = 0
+        HomrPipeline(modelFiles()).use { p ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val gray = loadGray(File(dir, "$name.png"))
+                    val t0 = System.currentTimeMillis()
+                    val fast = p.locate(gray, false, { _, _, _ -> }, { false })
+                    val tf = System.currentTimeMillis() - t0
+                    val usedClassic = p.usedClassic
+                    val t1 = System.currentTimeMillis()
+                    val acc = p.locate(gray, true, { _, _, _ -> }, { false })
+                    val ta = System.currentTimeMillis() - t1
+                    val fs = fast.systems.map { it.size }; val ac = acc.systems.map { it.size }
+                    val posOk = fast.staves.size == acc.staves.size && fast.staves.zip(acc.staves).all { (a, b) -> Math.abs(a.minY - b.minY) <= 3 && Math.abs(a.maxY - b.maxY) <= 3 }
+                    total++; if (fs == ac && posOk) same++
+                    if (System.getenv("HOMR_FASTDBG") == name) { println("FASTDBG fast: " + fast.staves.map { "${it.minX}..${it.maxX} y=${it.minY}-${it.maxY} u=%.1f".format(it.unit) }); println("FASTDBG acc : " + acc.staves.map { "${it.minX}..${it.maxX} y=${it.minY}-${it.maxY} u=%.1f".format(it.unit) }) }
+                    println("FAST $name: classic=$usedClassic fast=$fs (${tf} ms) accurate=$ac (${ta} ms) ${if (fs == ac && posOk) "OK" else "DIFF"}")
+                }
+            }
+        }
+        println("FAST TOTAL same $same of $total")
+    }
+
+    /** Итоговые ноты по голосам: быстрый режим против точного. HOMR_FULL=dir:name,name:two (two = хор на двух строках). */
+    @Test fun fastVsAccurateNotes() {
+        val spec = System.getenv("HOMR_FULL")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        var totalNotes = 0; var totalSame = 0
+        HomrPipeline(modelFiles()).use { p ->
+            for (part in spec!!.split(';')) {
+                val (dir, names, mode) = part.split(':').let { Triple(it[0], it[1], it.getOrNull(2)) }
+                for (name in names.split(',')) {
+                    val gray = loadGray(File(dir, "$name.png"))
+                    val t0 = System.currentTimeMillis(); val fast = p.recognizeAll(gray, accurate = false); val tf = System.currentTimeMillis() - t0
+                    val t1 = System.currentTimeMillis(); val acc = p.recognizeAll(gray, accurate = true); val ta = System.currentTimeMillis() - t1
+                    if (System.getenv("HOMR_SYS") == name) { for ((lab, sys) in listOf("fast" to fast, "acc " to acc)) for ((si, sy) in sys.withIndex()) println("SYS $lab sys $si: " + sy.joinToString { "${it.clef}${if (it.octave8) "8" else ""}/${it.medianMidi}/o=%.3f/x=${it.staff.minX}".format(it.octaveScore) }) }
+                    val sb = StringBuilder("FULL $name: fast ${tf} ms, accurate ${ta} ms |")
+                    for (v in ChoirVoice.values()) {
+                        fun notes(sys: List<List<StaffRead>>): List<Pair<Int, Double>> {
+                            val (tokens, shift) = if (mode == "two") ChoirAssigner.tokensForTwoStaff(v, sys) to 0 else ChoirAssigner.tokensFor(v, sys)
+                            return ru.partitrainer.core.omr.ClaudeOmr.assemble(TokenParser.parse(tokens, shift)).score.voices.first().notes.map { it.midi to it.beats }
+                        }
+                        val a = notes(acc); val f = notes(fast)
+                        val same = a.zip(f).count { it.first == it.second }
+                        sb.append(" ${v.name.take(1)} ${same}/${a.size}(fast ${f.size})")
+                        totalNotes += a.size; totalSame += same
+                    }
+                    println(sb)
+                }
+            }
+        }
+        println("FULL TOTAL same $totalSame of $totalNotes")
+    }
+
+    /** Калибровка признака «8» по 4-строчным системам (тенор — третья строка). HOMR_CAL=dir:name,name;... */
+    @Test fun calibrateOctave() {
+        val spec = System.getenv("HOMR_CAL")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val tenor = ArrayList<Double>(); val other = ArrayList<Double>()
+        HomrPipeline(modelFiles()).use { p ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val gray = loadGray(File(dir, "$name.png"))
+                    for (accurate in listOf(false, true)) {
+                        val loc = p.locate(gray, accurate, { _, _, _ -> }, { false })
+                        for (sys in loc.systems.filter { it.size == 4 }) {
+                            val left = sys.map { it.minX }.sorted()[2].toDouble()
+                            for ((i, st) in sys.withIndex()) {
+                                if (i == 3) continue   // басовый ключ
+                                val sc = StaffDetector.octaveMarkScore(loc.page, st, sys.getOrNull(i + 1)?.minY, left)
+                                if (i == 2) tenor += sc else other += sc
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fun q(l: List<Double>, p: Double) = l.sorted().let { it[((it.size - 1) * p).toInt()] }
+        println("CAL tenor n=${tenor.size}: min=%.3f p10=%.3f median=%.3f".format(tenor.min(), q(tenor, 0.1), q(tenor, 0.5)))
+        println("CAL other n=${other.size}: median=%.3f p90=%.3f max=%.3f".format(q(other, 0.5), q(other, 0.9), other.max()))
+    }
 }

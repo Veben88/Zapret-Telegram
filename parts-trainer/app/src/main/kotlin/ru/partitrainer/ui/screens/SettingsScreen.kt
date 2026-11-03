@@ -83,6 +83,13 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Text(stringResource(R.string.key_note), style = MaterialTheme.typography.bodySmall)
                 }
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.omr_accurate))
+                    Text(stringResource(R.string.omr_accurate_hint), style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(s.omrAccurate, { v -> vm.update { it.copy(omrAccurate = v) } })
+            }
             OutlinedButton(onClick = vm::clearCache, Modifier.heightIn(min = 48.dp)) { Text(stringResource(if (cleared) R.string.cache_cleared else R.string.clear_cache)) }
 
             HorizontalDivider()
