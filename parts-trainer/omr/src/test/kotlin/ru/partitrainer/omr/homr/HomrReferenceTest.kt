@@ -215,4 +215,46 @@ class HomrReferenceTest {
             }
         }
     }
+
+    /** Сравнение хорового разбора Kotlin и Python-homr по всем страницам (там, где во всех системах по 4 строки). */
+    @Test fun choirVsPythonAllPages() {
+        val real = System.getenv("HOMR_REAL")?.takeIf { it.isNotBlank() }?.let(::File)
+        assumeTrue(models != null && real != null && System.getenv("HOMR_CMP") == "1")
+        HomrPipeline(modelFiles()).use { p ->
+            var totalNotes = 0; var totalSame = 0
+            for (pg in 1..10) {
+                val systems = p.recognizeAll(loadGray(File(real, "p$pg.png")))
+                val sizes = systems.map { it.size }
+                val py = File(real, "p$pg.musicxml").takeIf { it.exists() }?.let { ru.partitrainer.core.io.MusicXmlParser.parse(it.inputStream()).score }
+                val line = StringBuilder("page $pg systems=$sizes")
+                for ((vi, v) in ChoirVoice.values().withIndex()) {
+                    val (tokens, shift) = ChoirAssigner.tokensFor(v, systems)
+                    val notes = ru.partitrainer.core.omr.ClaudeOmr.assemble(TokenParser.parse(tokens, 0)).score.voices.first().notes
+                    line.append(" | ${v.name.take(1)}:${notes.size}")
+                    if (py != null && sizes.all { it == 4 } && py.voices.size == 4) {
+                        val pn = py.voices[vi].notes
+                        val same = notes.zip(pn).count { it.first.midi == it.second.midi && it.first.beats == it.second.beats }
+                        line.append("(py ${pn.size}, same $same)")
+                        totalNotes += pn.size; totalSame += same
+                    }
+                }
+                println(line)
+            }
+            println("TOTAL same $totalSame of $totalNotes on uniform pages")
+        }
+    }
+
+    @Test fun debugLines() {
+        val real = System.getenv("HOMR_REAL")?.takeIf { it.isNotBlank() }?.let(::File)
+        assumeTrue(models != null && real != null && System.getenv("HOMR_DBG") == "1")
+        val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+        val sess = env.createSession(modelFiles().segnet.path)
+        val page = ImageOps.clahe(ImageOps.resizeToHomrWidth(loadGray(File(real, "p${System.getenv("HOMR_PAGE") ?: "8"}.png"))))
+        val seg = Segnet(env, sess).segment(page)
+        val lines = StaffDetector.findLines(seg)
+        println("lines=" + lines.size)
+        var prev = 0.0
+        for (l in lines.take(40)) { println("  y=%.1f gap=%.1f x=%d..%d".format(l.y, l.y - prev, l.minX, l.maxX)); prev = l.y }
+        println("STAVES " + StaffDetector.groupStaves(lines, page.height).map { "${it.minY}-${it.maxY}(u=%.1f)".format(it.unit) })
+    }
 }

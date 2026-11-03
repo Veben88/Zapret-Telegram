@@ -18,7 +18,11 @@ object StaffDetector {
     private const val MIN_RUN = 60          // минимальная длина пробега, пикселей на странице шириной 1920
     private const val MAX_GAP = 4           // «дыры» в линии (нота поверх линейки), пикселей
 
-    fun detect(map: SegMap): List<DetectedStaff> {
+    class Line(val y: Double, val minX: Int, val maxX: Int)
+
+    fun detect(map: SegMap): List<DetectedStaff> = groupStaves(findLines(map), map.height)
+
+    fun findLines(map: SegMap): List<Line> {
         val w = map.width; val h = map.height
         val staffCls = SegClass.STAFF.toByte()
         // 1) длина пробегов по строкам, начало/конец крайних пробегов
@@ -46,7 +50,6 @@ object StaffDetector {
             }
         }
         // 2) линии = связные группы строк
-        class Line(val y: Double, val minX: Int, val maxX: Int)
         val lines = ArrayList<Line>()
         var y = 0
         val maxThickness = max(6, h / 300)
@@ -61,21 +64,45 @@ object StaffDetector {
             }
             y = e + 1
         }
-        // 3) пятёрки линий с одинаковым шагом и пересекающимися по X
+        return lines
+    }
+
+    /**
+     * Пятёрки линий с равным шагом. Посторонние «линии» (куски лиг, вилок, титров) между линейками
+     * пропускаются: шаг берётся от пары линий, остальные ищутся там, где им положено быть.
+     */
+    fun groupStaves(lines: List<Line>, h: Int): List<DetectedStaff> {
+        val used = BooleanArray(lines.size)
         val staves = ArrayList<DetectedStaff>()
-        var i = 0
-        while (i + 4 < lines.size) {
-            val gaps = DoubleArray(4) { lines[i + it + 1].y - lines[i + it].y }
-            val mn = gaps.min(); val mx = gaps.max()
-            val xMin = (0..4).maxOf { lines[i + it].minX }; val xMax = (0..4).minOf { lines[i + it].maxX }
-            if (mn >= 4.0 && mx / mn <= 1.3 && mx < 60.0 && xMax - xMin > MIN_RUN) {
-                val u = gaps.average()
-                val x0 = (0..4).minOf { lines[i + it].minX }; val x1 = (0..4).maxOf { lines[i + it].maxX }
-                staves += DetectedStaff(x0, x1, lines[i].y.toInt(), lines[i + 4].y.toInt(), u)
-                i += 5
-            } else i++
+        for (i in lines.indices) {
+            if (used[i]) continue
+            for (m in i + 1 until lines.size) {
+                if (used[m]) continue
+                val span = lines[m].y - lines[i].y
+                if (span > 4 * 40.0) break
+                if (span < 4 * 6.0) continue
+                val d = span / 4.0
+                val chain = IntArray(5); chain[0] = i; chain[4] = m
+                var ok = true
+                for (k in 1..3) {
+                    val target = lines[i].y + k * d
+                    var best = -1; var bestDiff = Double.MAX_VALUE
+                    for (q in i + 1 until m) {
+                        val diff = Math.abs(lines[q].y - target)
+                        if (diff < bestDiff) { bestDiff = diff; best = q }
+                    }
+                    if (best < 0 || used[best] || bestDiff > 0.12 * d) { ok = false; break }
+                    chain[k] = best
+                }
+                if (!ok) continue
+                val xMin = chain.maxOf { lines[it].minX }; val xMax = chain.minOf { lines[it].maxX }
+                if (xMax - xMin <= MIN_RUN) continue
+                staves += DetectedStaff(chain.minOf { lines[it].minX }, chain.maxOf { lines[it].maxX }, lines[i].y.toInt(), lines[m].y.toInt(), d)
+                chain.forEach { used[it] = true }
+                break
+            }
         }
-        return staves
+        return staves.sortedBy { it.minY }
     }
 
     /**
