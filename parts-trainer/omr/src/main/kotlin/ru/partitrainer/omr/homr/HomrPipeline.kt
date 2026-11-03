@@ -113,7 +113,7 @@ class HomrPipeline(
         onProgress(chosen.size, chosen.size, "Страница готова")
         val columns = chosen.map { st ->
             val sys = systems.firstOrNull { st in it } ?: listOf(st)
-            Barlines.columns(page, st, sys, loc.angle)
+            Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(result[chosen.indexOf(st)])).measures.size)
         }
         return PageTokens(staves.size, result, staves, chosen, lyrics, columns)
     }
@@ -153,7 +153,7 @@ class HomrPipeline(
                 val octScore = StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
                 val oct = octScore > OCTAVE_MARK_THRESHOLD
                 val lines = text?.let { rec -> Lyrics.readLines(rec, page, st, nextStaffOf(st, staves)) } ?: emptyList()
-                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore, lines, Barlines.columns(page, st, sys, loc.angle))
+                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore, lines, Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(tokens)).measures.size))
             }
             out += reads
         }

@@ -517,4 +517,39 @@ class HomrReferenceTest {
         } }
         println("INT8 TOTAL same $same of $total; float ${msF} ms vs int8 ${msQ} ms")
     }
+
+    /** Тактовые черты на реальных страницах: HOMR_BARS=dir:p1,p2;dir2:... — сверка с числом тактов по токенам, картинки *_bars.png. */
+    @Test fun barlinesOnRealPages() {
+        val spec = System.getenv("HOMR_BARS")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder"))).use { pl ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val gray = loadGray(File(dir, "$name.png"))
+                    val loc = pl.locate(gray, false, { _, _, _ -> }, { false })
+                    val reads = pl.recognizeAll(gray)
+                    var ok = 0; var tot = 0
+                    val img = java.awt.image.BufferedImage(loc.page.width, loc.page.height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+                    for (y in 0 until loc.page.height) for (x in 0 until loc.page.width) { val v = loc.page[x, y]; img.setRGB(x, y, (v shl 16) or (v shl 8) or v) }
+                    val g = img.createGraphics()
+                    val sb = StringBuilder("BARS $name:")
+                    for (sys in reads) for (r in sys) {
+                        val c = TokenParser.parse(listOf(r.tokens)).measures.size
+                        val xs = r.columns!!.xs
+                        val k = xs.size - 1
+                        tot++; if (k == c) ok++
+                        sb.append(" ${k}/${c}")
+                        g.color = if (k == c) java.awt.Color(0, 160, 0) else java.awt.Color(220, 0, 0)
+                        g.stroke = java.awt.BasicStroke(3f)
+                        for (x in xs) g.drawLine(x.toInt(), r.columns!!.top.toInt(), x.toInt(), r.columns!!.bottom.toInt())
+                    }
+                    g.dispose()
+                    ImageIO.write(img, "png", File(dir, "${name}_bars.png"))
+                    println("$sb  => совпало $ok из $tot")
+                }
+            }
+        }
+    }
 }
