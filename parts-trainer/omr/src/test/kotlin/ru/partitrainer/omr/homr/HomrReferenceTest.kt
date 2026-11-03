@@ -552,4 +552,85 @@ class HomrReferenceTest {
             }
         }
     }
+
+    /** Скорость: HOMR_BENCH=dir:page; варианты «потоков энкодера/декодера/параллельных нотоносцев». */
+    @Test fun benchThreads() {
+        val spec = System.getenv("HOMR_BENCH")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val (dir, name) = spec!!.split(':')
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        val gray = loadGray(File(dir, "$name.png"))
+        val cores = Runtime.getRuntime().availableProcessors()
+        var ref: List<List<EncodedSymbol>>? = null
+        val cfgs = System.getenv("HOMR_CFG")?.split(";")?.map { c -> c.split(",").map { it.toInt() }.let { Triple(it[0], it[1], it[2]) } } ?: listOf(Triple(cores, cores, 1), Triple(1, 1, 2), Triple(1, 1, cores))
+        for ((th, dec, w) in cfgs) {
+            HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = cores, staffWorkers = w, decoderThreads = dec, encoderThreads = th, serialEncoder = System.getenv("HOMR_SERIAL") == "1").use { pl ->
+                pl.recognizeAll(gray)   // прогрев
+                val t0 = System.currentTimeMillis()
+                val r = pl.recognizeAll(gray)
+                val ms = System.currentTimeMillis() - t0
+                val toks = r.flatten().map { it.tokens }
+                if (ref == null) ref = toks
+                println("BENCH threads=$th dec=$dec workers=$w: $ms ms, same=${toks == ref}, ${pl.timings} enc=${pl.lastS2s?.encoderMs} dec=${pl.lastS2s?.decoderMs} steps=${pl.lastS2s?.steps} peakRSS=${File("/proc/self/status").readLines().first { it.startsWith("VmHWM") }} javaHeap=${Runtime.getRuntime().totalMemory() / 1048576}MB")
+            }
+        }
+    }
+
+    /** Точность: HOMR_ACC=dir:p1,p2;... — сколько нотоносцев с «битыми» тактами у разных вариантов вырезки строки. */
+    @Test fun canvasVariants() {
+        val spec = System.getenv("HOMR_ACC")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        val variants = listOf(4.0 to 2.0, 3.0 to 2.0, 5.0 to 2.0, 4.0 to 1.0, 4.0 to 3.0, 2.5 to 1.5)
+        fun bad(t: List<EncodedSymbol>) = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(TokenParser.parse(listOf(t))).size
+        val totals = IntArray(variants.size); var bestTotal = 0; var staves = 0; var badStaves = 0; var fixedStaves = 0
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 1, staffWorkers = 4, decoderThreads = 1).use { pl ->
+            val s2s = Staff2Score(ai.onnxruntime.OrtEnvironment.getEnvironment(),
+                ai.onnxruntime.OrtEnvironment.getEnvironment().createSession(f("encoder").path), ai.onnxruntime.OrtEnvironment.getEnvironment().createSession(f("decoder").path), HomrVocab.fromResources())
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val gray = loadGray(File(dir, "$name.png"))
+                    val loc = pl.locate(gray, false, { _, _, _ -> }, { false })
+                    for (st in loc.staves) {
+                        staves++
+                        val res = variants.map { (v, h) -> s2s.predict(HomrPipeline.staffCanvas(loc.page, st, loc.staves, v, h)) }
+                        val b = res.map { bad(it) }
+                        b.forEachIndexed { i, x -> totals[i] += x }
+                        val best = if (b[0] == 0) 0 else b.min()
+                        bestTotal += best
+                        if (b[0] > 0) { badStaves++; if (best < b[0]) fixedStaves++ }
+                    }
+                    println("ACC $name done: totals=${totals.toList()} best=$bestTotal")
+                }
+            }
+        }
+        println("ACC FINAL variants=$variants totals=${totals.toList()} bestOf=$bestTotal staves=$staves bad=$badStaves improved=$fixedStaves")
+    }
+
+    /** Разбор «битых» тактов: HOMR_BAD=dir:p1,... — токены тактов, где сумма длительностей не сходится. */
+    @Test fun badMeasureDump() {
+        val spec = System.getenv("HOMR_BAD")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 1, staffWorkers = 4, decoderThreads = 1).use { pl ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val reads = pl.recognizeAll(loadGray(File(dir, "$name.png")))
+                    for ((si, sys) in reads.withIndex()) for (r in sys) {
+                        val p = TokenParser.parse(listOf(r.tokens))
+                        val bad = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(p)
+                        if (bad.isEmpty()) continue
+                        // токены по тактам
+                        val groups = ArrayList<MutableList<String>>(); var cur = ArrayList<String>()
+                        for (t in r.tokens) { if (t.rhythm.contains("barline") || t.rhythm.startsWith("repeat")) { groups += cur; cur = ArrayList() } else cur += (t.rhythm + (if (t.pitch != "." && t.pitch != "_") "/" + t.pitch else "")) }
+                        groups += cur
+                        println("BAD $name sys$si staff${r.indexInSystem} meter=${p.timeNum}/${p.timeDen} bad=$bad totals=${p.measures.map { it.total }}")
+                        for (b in bad) println("   m$b: ${groups.filter { g -> g.any { it.startsWith("note") || it.startsWith("rest") } }.getOrNull(b)}")
+                    }
+                }
+            }
+        }
+    }
 }

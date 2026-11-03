@@ -61,8 +61,6 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
         } catch (e: Exception) { "Не удалось восстановить: ${e.message}" }
     }
 
-    /** «Точный режим» включён — докачать модель сегментации, если её нет. */
-    fun ensureSegnet() { if (!c.homrModels.segnetInstalled()) c.homrModels.startDownload(withSegnet = true) }
     fun saveKey(k: String) { if (k.isNotBlank()) { c.keyStore.save(k); hasKey.value = true } }
     fun deleteKey() { c.keyStore.delete(); hasKey.value = false }
     val models get() = c.homrModels
@@ -116,7 +114,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Text(stringResource(R.string.omr_accurate))
                     Text(stringResource(R.string.omr_accurate_hint), style = MaterialTheme.typography.bodySmall)
                 }
-                Switch(s.omrAccurate, { v -> vm.update { it.copy(omrAccurate = v) }; if (v) vm.ensureSegnet() })
+                Switch(s.omrAccurate, { v -> vm.update { it.copy(omrAccurate = v) } })
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

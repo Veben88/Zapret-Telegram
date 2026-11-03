@@ -108,11 +108,15 @@ object TokenParser {
                     multiRest.matches(r) -> { /* многотактовая пауза: отдельные такты нам не нужны */ }
                     r == REST_MEASURE -> { commitSigs(); cur.events += Ev(null, FILL, false, ""); prevEvent = null }
                     r.startsWith("note_") || r.startsWith("rest_") -> {
-                        val b = beats(r) ?: continue
+                        // Время до следующего события — по самой короткой ноте/паузе аккорда (как в homr: у нот аккорда
+                        // бывают разные длительности, когда на строке два голоса). Раньше бралась длительность первой ноты,
+                        // и такие такты «не сходились».
+                        val b = g.filter { it.rhythm.startsWith("note_") || it.rhythm.startsWith("rest_") }
+                            .mapNotNull { beats(it.rhythm) }.minOrNull() ?: continue
                         commitSigs()
-                        if (r.startsWith("rest_")) { cur.events += Ev(null, b, false, ""); prevEvent = null; continue }
+                        if (g.none { it.rhythm.startsWith("note_") && beats(it.rhythm) != null }) { cur.events += Ev(null, b, false, ""); prevEvent = null; continue }
                         // из аккорда берём верхнюю ноту
-                        val best = g.filter { it.rhythm.startsWith("note_") }
+                        val best = g.filter { it.rhythm.startsWith("note_") && beats(it.rhythm) != null }
                             .mapNotNull { n -> midi(n.pitch, n.lift)?.let { it to n } }
                             .maxByOrNull { it.first } ?: continue
                         val ev = Ev(((best.first + transpose).coerceIn(0, 127)), b, false, best.second.slur)

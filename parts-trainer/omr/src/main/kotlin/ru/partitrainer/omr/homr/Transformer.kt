@@ -38,6 +38,8 @@ class HomrVocab private constructor(
 class Staff2Score(
     private val env: OrtEnvironment, private val encoder: OrtSession, private val decoder: OrtSession,
     private val vocab: HomrVocab,
+    /** Если задан — прогоны энкодера идут по одному (он тяжёлый по памяти), а декодеры нескольких строк — параллельно. */
+    private val encoderLock: Any? = null,
 ) {
     companion object {
         const val HEIGHT = 256
@@ -56,7 +58,7 @@ class Staff2Score(
 
     private val cacheIn = (0 until DEPTH * 4).map { "cache_in$it" }
     private val cacheOut = (0 until DEPTH * 4).map { "cache_out$it" }
-    private val outNames = listOf("out_rhythms", "out_pitchs", "out_lifts", "out_positions", "out_articulations", "out_slurs", "attention") + cacheOut
+    private val outNames = listOf("out_rhythms", "out_pitchs", "out_lifts", "out_positions", "out_articulations", "out_slurs") + cacheOut
 
     private fun longTensor(v: Long) = OnnxTensor.createTensor(env, LongBuffer.wrap(longArrayOf(v)), longArrayOf(1, 1))
 
@@ -66,7 +68,7 @@ class Staff2Score(
         val x = FloatArray(HEIGHT * WIDTH) { (((canvas.data[it].toInt() and 0xFF) / 255.0 - MEAN) / STD).toFloat() }
         val ctxTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(x), longArrayOf(1, 1, HEIGHT.toLong(), WIDTH.toLong()))
         val te = System.nanoTime()
-        val ctxResult = ctxTensor.use { encoder.run(mapOf(encoder.inputNames.first() to it)) }
+        val ctxResult = ctxTensor.use { t -> if (encoderLock != null) synchronized(encoderLock) { encoder.run(mapOf(encoder.inputNames.first() to t)) } else encoder.run(mapOf(encoder.inputNames.first() to t)) }
         encoderMs += (System.nanoTime() - te) / 1_000_000
         ctxResult.use { encRes ->
             val ctx = encRes[0] as OnnxTensor

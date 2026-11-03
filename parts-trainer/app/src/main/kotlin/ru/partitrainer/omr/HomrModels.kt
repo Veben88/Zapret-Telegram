@@ -40,12 +40,13 @@ class HomrModelManager(context: Context) {
         const val ENCODER_BYTES = 17_142_614L
     }
 
-    /** Модель сегментации нужна только «Точному режиму» и редким страницам, где быстрый поиск линеек не справился. */
+    /** Модель сегментации: «Точный режим» и запасной путь для страниц, где быстрый поиск линеек не справился. */
     private val segnetSpec = Spec("segnet_308-3296ccd40960f90ca6ab9c035cca945675d30a0f.zip", "segnet_308-3296ccd40960f90ca6ab9c035cca945675d30a0f.onnx",
         "6ed36640db4ef5d223098b6d5efe4eda97c66b24a2c72faab8a018c749003a8d", 53_214_519)
 
-    /** Обязательные для работы модели (энкодер встроен в APK). */
+    /** Модели, которые скачиваются (энкодер встроен в APK). Сегментатор обязателен, чтобы трудные страницы не срывались. */
     private val specs = listOf(
+        segnetSpec,
         Spec("decoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.zip", "decoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.onnx",
             "99a6ac39770616bc1a20d6c409bb85fbbe21ba47f972984f9ef834fb5741b96f", 37_824_782),
     )
@@ -63,13 +64,20 @@ class HomrModelManager(context: Context) {
 
     fun segnetInstalled() = fileOf(segnetSpec).isFile
 
+    /** Достаточно ли памяти, чтобы читать несколько строк одновременно (каждый параллельный прогон энкодера — сотни МБ). */
+    val bigMemoryDevice: Boolean by lazy {
+        val am = appContext.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val mi = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        mi.totalMem >= 5_500_000_000L && !am.isLowRamDevice
+    }
+
     private fun fileOf(s: Spec) = File(dir, s.onnx)
     private fun installed() = specs.all { fileOf(it).isFile }
 
     fun files(): HomrModelFiles? {
         if (!installed()) return null
         dir.listFiles()?.filter { it.name.startsWith("encoder_") }?.forEach { it.delete() } // старый float-энкодер
-        return try { HomrModelFiles(fileOf(segnetSpec), ensureEncoder(), fileOf(specs[0])) } catch (e: Exception) { null }
+        return try { HomrModelFiles(fileOf(segnetSpec), ensureEncoder(), fileOf(specs[1])) } catch (e: Exception) { null }
     }
 
     /** Копирует энкодер из assets и проверяет SHA-256 (повторно — только если файла нет или он повреждён). */
@@ -88,9 +96,9 @@ class HomrModelManager(context: Context) {
         return f
     }
 
-    /** Скачивает недостающие модели; [withSegnet] — ещё и модель сегментации (для «Точного режима»). */
-    fun startDownload(withSegnet: Boolean = false) {
-        val need = if (withSegnet) specs + segnetSpec else specs
+    /** Скачивает недостающие модели. */
+    fun startDownload() {
+        val need = specs
         if (job?.isActive == true || need.all { fileOf(it).isFile }) { if (installed()) _state.value = ModelState.Ready; return }
         job = scope.launch {
             try {

@@ -43,9 +43,6 @@ class HomrOnDeviceEngine(
 
     override suspend fun recognize(request: OmrRequest, onProgress: (OmrProgress) -> Unit): OmrParsed {
         val files = models.files() ?: throw OmrException("Модели не скачаны", offerManual = false)
-        if (request.accurate && !models.segnetInstalled()) {
-            throw OmrException("Включён «Точный режим», но модель сегментации (≈${models.segnetSizeMb} МБ) не скачана. Откройте Настройки → Распознавание и включите режим заново.", offerManual = false)
-        }
         if (request.staff.isChoirVoice) return recognizeChoir(files, request, onProgress)
         val sel = when (request.staff) {
             StaffSelection.RIGHT_HAND -> StaffDetector.Staff.RIGHT_HAND
@@ -60,7 +57,7 @@ class HomrOnDeviceEngine(
         val text = if (request.lyrics) textFactory?.invoke() else null
         try {
             withContext(Dispatchers.Default) {
-                HomrPipeline(files, threads = CpuTopology.performanceThreads(), text = text).use { pipeline ->
+                newPipeline(files, text).use { pipeline ->
                     for ((i, page) in request.pages.withIndex()) {
                         ctx.ensureActive()
                         onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: подготовка"))
@@ -80,7 +77,7 @@ class HomrOnDeviceEngine(
                 }
             }
         } catch (e: ru.partitrainer.omr.homr.SegnetMissingException) {
-            throw OmrException("Нотоносцы не найдены обычным способом. Включите «Точный режим» в настройках (скачает ещё ≈${models.segnetSizeMb} МБ) или введите ноты вручную.", offerManual = true)
+            throw OmrException("Модель сегментации повреждена или удалена. Скачайте модели заново в настройках.", offerManual = true)
         } catch (e: InterruptedException) {
             throw CancellationException("Отменено")
         } catch (e: OutOfMemoryError) {
@@ -115,7 +112,7 @@ class HomrOnDeviceEngine(
                         ctx.ensureActive()
                         val systems = choirPages[page] ?: run {
                             onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: подготовка"))
-                            val p = pipeline ?: HomrPipeline(files, threads = CpuTopology.performanceThreads(), text = text).also { pipeline = it }
+                            val p = pipeline ?: newPipeline(files, text).also { pipeline = it }
                             val bmp = request.provider.render(page)
                             val gray = try { toGray(bmp) } finally { bmp.recycle() }
                             p.recognizeAll(gray, accurate = request.accurate, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive })
@@ -133,7 +130,7 @@ class HomrOnDeviceEngine(
                 } finally { pipeline?.close() }
             }
         } catch (e: ru.partitrainer.omr.homr.SegnetMissingException) {
-            throw OmrException("Нотоносцы не найдены обычным способом. Включите «Точный режим» в настройках (скачает ещё ≈${models.segnetSizeMb} МБ) или введите ноты вручную.", offerManual = true)
+            throw OmrException("Модель сегментации повреждена или удалена. Скачайте модели заново в настройках.", offerManual = true)
         } catch (e: InterruptedException) {
             throw CancellationException("Отменено")
         } catch (e: OutOfMemoryError) {
@@ -146,6 +143,20 @@ class HomrOnDeviceEngine(
         }
         return TokenParser.parse(tokens, shift, if (text != null) Lyrics.forStaffs(tokens, lines) else emptyList())
             .copy(layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) }))
+    }
+
+    /**
+     * Строки читаются параллельно: шаг декодера мал, поэтому каждый поток ведёт свою строку в 1 поток ONNX Runtime
+     * (≈35–40 % быстрее, чем одна строка за раз во все потоки; результат тот же). Энкодер тяжёл по памяти: на телефонах
+     * с большим объёмом ОЗУ он тоже идёт параллельно, иначе — по одному прогону в 2 потока.
+     */
+    private fun newPipeline(files: ru.partitrainer.omr.homr.HomrModelFiles, text: TextRecognizer?): HomrPipeline {
+        val perf = CpuTopology.performanceThreads()
+        val big = models.bigMemoryDevice
+        return HomrPipeline(
+            files, threads = perf, staffWorkers = perf.coerceIn(1, 4), text = text,
+            decoderThreads = 1, encoderThreads = if (big) 1 else 2.coerceAtMost(perf), serialEncoder = !big,
+        )
     }
 
     private fun toGray(bmp: Bitmap): GrayImage {

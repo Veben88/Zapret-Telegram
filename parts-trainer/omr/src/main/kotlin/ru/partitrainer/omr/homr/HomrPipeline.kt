@@ -37,12 +37,29 @@ class HomrPipeline(
     private val files: HomrModelFiles, threads: Int = 0, private val staffWorkers: Int = defaultWorkers(),
     /** Если задан — под каждым прочитанным нотоносцем распознаётся текст (слова песни). */
     private val text: TextRecognizer? = null,
+    /** Потоков на один шаг декодера (0 — как [threads]). Шаг декодера мал, поэтому выгоднее 1 поток и несколько нотоносцев параллельно. */
+    decoderThreads: Int = 0,
+    /** Потоков на энкодер (0 — как [threads]). При параллельном чтении нотоносцев выгоднее 1. */
+    encoderThreads: Int = 0,
+    /** Энкодер — по одному прогону за раз (экономия памяти при параллельном чтении строк). */
+    private val serialEncoder: Boolean = false,
 ) : AutoCloseable {
+    private val encLock = Any()
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val opts = OrtSession.SessionOptions().apply { if (threads > 0) setIntraOpNumThreads(threads) }
+    private val decOpts = OrtSession.SessionOptions().apply {
+        val n = if (decoderThreads > 0) decoderThreads else threads
+        if (n > 0) setIntraOpNumThreads(n)
+    }
+    private val encOpts = OrtSession.SessionOptions().apply {
+        val n = if (encoderThreads > 0) encoderThreads else threads
+        if (n > 0) setIntraOpNumThreads(n)
+        // Арена ORT растёт под каждый одновременный прогон и не отдаёт память; при параллельном чтении это сотни МБ
+        if (System.getenv("HOMR_ARENA") != "1") setCPUArenaAllocator(false)
+    }
     private val segSession by lazy { env.createSession(files.segnet.path, opts) }
-    private val encSession by lazy { env.createSession(files.encoder.path, opts) }
-    private val decSession by lazy { env.createSession(files.decoder.path, opts) }
+    private val encSession by lazy { env.createSession(files.encoder.path, encOpts) }
+    private val decSession by lazy { env.createSession(files.decoder.path, decOpts) }
     private val vocab = HomrVocab.fromResources()
 
     /** Время этапов последней страницы, мс (для профилирования и тестов). */
@@ -107,7 +124,7 @@ class HomrPipeline(
         val page = loc.page; val staves = loc.staves; val systems = loc.systems
         if (staves.isEmpty()) return PageTokens(0, emptyList(), emptyList(), emptyList())
         val chosen = systems.mapNotNull { sys -> (staffInSystem?.takeIf { it < sys.size } ?: if (staffInSystem != null) null else StaffDetector.indexInSystem(selection, sys.size))?.let { sys[it] } }
-        val s2s = Staff2Score(env, encSession, decSession, vocab)
+        val s2s = Staff2Score(env, encSession, decSession, vocab, if (serialEncoder) encLock else null)
         val canvases = chosen.map { st -> staffCanvas(page, st, staves) }
         val result = predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, chosen.size, "Чтение нотоносца $done из ${chosen.size}") }
         val lyrics = text?.let { rec ->
@@ -136,7 +153,7 @@ class HomrPipeline(
         val loc = locate(gray, accurate, onProgress, isCancelled)
         val page = loc.page; val staves = loc.staves; val systems = loc.systems
         if (staves.isEmpty()) return emptyList()
-        val s2s = Staff2Score(env, encSession, decSession, vocab)
+        val s2s = Staff2Score(env, encSession, decSession, vocab, if (serialEncoder) encLock else null)
         lastS2s = s2s
         val total = staves.size
         val jobs = ArrayList<Triple<Int, Int, DetectedStaff>>()           // система, номер в системе, нотоносец
@@ -197,7 +214,7 @@ class HomrPipeline(
 
     override fun close() {
         runCatching { segSession.close() }; runCatching { encSession.close() }; runCatching { decSession.close() }
-        opts.close()
+        opts.close(); decOpts.close(); encOpts.close()
     }
 
     companion object {
@@ -211,16 +228,16 @@ class HomrPipeline(
         fun defaultWorkers(): Int = 1
 
         /** Изображение строки для трансформера: 256×1280, белый фон, область по правилам homr (prepare_staff_image). */
-        fun staffCanvas(page: GrayImage, staff: DetectedStaff, all: List<DetectedStaff>): GrayImage {
+        fun staffCanvas(page: GrayImage, staff: DetectedStaff, all: List<DetectedStaff>, vPad: Double = 4.0, hPad: Double = 2.0): GrayImage {
             val u = staff.unit
-            val xMin = staff.minX - 2 * u; val xMax = staff.maxX + 2 * u
+            val xMin = staff.minX - hPad * u; val xMax = staff.maxX + hPad * u
             val xm = (staff.minX + staff.maxX) / 2.0
             val topMid = staff.topAt(xm); val botMid = staff.bottomAt(xm)
             val above = all.filter { it.maxY < staff.minY + 1 && it !== staff && (it.minY + it.maxY) < (staff.minY + staff.maxY) }.maxOfOrNull { it.bottomAt(xm) }
             val below = all.filter { it !== staff && (it.minY + it.maxY) > (staff.minY + staff.maxY) }.minOfOrNull { it.topAt(xm) }
             // область по вертикали — относительно верхней линейки (так строка «выпрямляется» вдоль её изгиба)
-            val relMin = max(-4 * u, (above ?: -1e9) - topMid)
-            val relMax = min((botMid - topMid) + 4 * u, (below ?: 1e12) - topMid)
+            val relMin = max(-vPad * u, (above ?: -1e9) - topMid)
+            val relMax = min((botMid - topMid) + vPad * u, (below ?: 1e12) - topMid)
             val regionH = relMax - relMin; val regionW = xMax - xMin
             val (cw, ch) = canvasSize(regionH.toInt().coerceAtLeast(1), regionW.toInt().coerceAtLeast(1))
             val canvas = GrayImage(Staff2Score.WIDTH, Staff2Score.HEIGHT).also { java.util.Arrays.fill(it.data, 0xFF.toByte()) }

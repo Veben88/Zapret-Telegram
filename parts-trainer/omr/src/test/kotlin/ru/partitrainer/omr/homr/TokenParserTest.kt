@@ -60,4 +60,16 @@ class TokenParserTest {
         assertEquals(listOf(6, 4, 4, 4), p.measures.map { it.timeNum!! * 4 / it.timeDen!! })
         assertTrue(ClaudeOmr.badMeasures(p).isEmpty())
     }
+
+    @Test fun chordAdvancesByShortestNote() {
+        // два голоса на строке: верхний E5 четверть с точкой, нижний B4 половинная; время идёт по самой короткой (как в homr)
+        val t = listOf(
+            s("timeSignature/4"),
+            note("note_4.", "E5"), s("chord"), note("note_2", "B4"), note("note_8", "B4"),
+            note("note_4", "D5"), s("chord"), note("note_8", "D5"), note("note_8", "E5"), s("barline"),
+        )
+        val p = TokenParser.parse(listOf(t))
+        assertEquals(3.0, p.measures.single().total, 1e-9)
+        assertEquals(listOf(76, 71, 74, 76), p.measures.single().events.map { it.midi })
+    }
 }
