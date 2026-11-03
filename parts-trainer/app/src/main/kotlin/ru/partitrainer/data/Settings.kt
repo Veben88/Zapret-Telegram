@@ -32,6 +32,10 @@ data class Settings(
     val claudeWarningAccepted: Boolean = false,
     /** Точный режим распознавания на устройстве: нейросеть сегментации вместо быстрого поиска линеек (медленнее, надёжнее на изогнутых фото). */
     val omrAccurate: Boolean = false,
+    /** Сустейн звука при воспроизведении, 0..1 (длина затухания после конца ноты). */
+    val sustain: Float = 0.5f,
+    /** Распознавать слова под нотами (текст) при чтении нот на устройстве. */
+    val omrLyrics: Boolean = false,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -51,6 +55,8 @@ class SettingsRepository(private val context: Context) {
         val phrase = intPreferencesKey("measures_per_phrase")
         val warned = booleanPreferencesKey("claude_warned")
         val accurate = booleanPreferencesKey("omr_accurate")
+        val sustain = floatPreferencesKey("sustain")
+        val lyrics = booleanPreferencesKey("omr_lyrics")
     }
 
     val flow: Flow<Settings> = context.dataStore.data.map { snapshot(it) }
@@ -63,6 +69,7 @@ class SettingsRepository(private val context: Context) {
             p[K.theme] = n.theme.name; p[K.tolerance] = n.toleranceCents; p[K.octave] = n.matchOctave
             p[K.volume] = n.volume; p[K.other] = n.otherVoicesVolume; p[K.playOthers] = n.playOthers
             p[K.countIn] = n.countIn; p[K.phrase] = n.measuresPerPhrase; p[K.warned] = n.claudeWarningAccepted; p[K.accurate] = n.omrAccurate
+            p[K.sustain] = n.sustain; p[K.lyrics] = n.omrLyrics
         }
     }
 
@@ -82,6 +89,8 @@ class SettingsRepository(private val context: Context) {
             measuresPerPhrase = p[K.phrase] ?: d.measuresPerPhrase,
             claudeWarningAccepted = p[K.warned] ?: d.claudeWarningAccepted,
             omrAccurate = p[K.accurate] ?: d.omrAccurate,
+            sustain = (p[K.sustain] ?: d.sustain).coerceIn(0f, 1f),
+            omrLyrics = p[K.lyrics] ?: d.omrLyrics,
         )
     }
 }

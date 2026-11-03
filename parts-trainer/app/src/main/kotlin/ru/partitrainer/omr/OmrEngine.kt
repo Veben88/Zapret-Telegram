@@ -37,7 +37,9 @@ fun interface PageProvider { suspend fun render(page: Int): Bitmap }
  * [twoStaffChoir] — хор записан на двух строках (SA сверху, TB ниже, с дивизи) и фортепиано под ним;
  * действует только для хоровых вариантов выбора.
  */
-class OmrRequest(val pages: List<Int>, val staff: StaffSelection, val provider: PageProvider, val twoStaffChoir: Boolean = false, val accurate: Boolean = false)
+class OmrRequest(val pages: List<Int>, val staff: StaffSelection, val provider: PageProvider, val twoStaffChoir: Boolean = false, val accurate: Boolean = false,
+    /** Распознавать слова песни под нотами (только движок «На устройстве»). */
+    val lyrics: Boolean = false)
 
 data class OmrProgress(val done: Int, val total: Int, val message: String)
 

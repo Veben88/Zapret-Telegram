@@ -112,11 +112,11 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
     /** Запускает задание; возвращает id работы или null, если нужно подтверждение/ошибка. */
     suspend fun start(): String? {
         val s = c.settings.flow.first()
-        val engine: OmrEngine = if (s.engine == EngineId.ON_DEVICE) HomrOnDeviceEngine(c.homrModels) else ClaudeVisionEngine { c.keyStore.load() }
+        val engine: OmrEngine = if (s.engine == EngineId.ON_DEVICE) HomrOnDeviceEngine(c.homrModels) { ClaudeTextRecognizer { c.keyStore.load() } } else ClaudeVisionEngine { c.keyStore.load() }
         (engine.availability() as? Availability.Unavailable)?.let { error.value = it.reason; return null }
         val pages = selected.value.sorted()
         if (pages.isEmpty()) { error.value = "Выберите хотя бы одну страницу"; return null }
-        val job = OmrJob(path, hash, isPdf, name, pages, pages.map { rotations.value[it] ?: 0 }, staff.value, s.engine, twoStaff.value, s.omrAccurate)
+        val job = OmrJob(path, hash, isPdf, name, pages, pages.map { rotations.value[it] ?: 0 }, staff.value, s.engine, twoStaff.value, s.omrAccurate, s.omrLyrics)
         return OmrJob.enqueue(c.context, job).toString()
     }
 

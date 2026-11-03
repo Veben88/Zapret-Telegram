@@ -93,7 +93,7 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
                 tempo = p.score.tempo ?: 85, expand = p.expandRepeats, measuresPerPhrase = s.measuresPerPhrase)
             ru.partitrainer.ui.components.SpellingState.flats = p.score.keyFifths < 0
             recompute()
-            c.settings.flow.collect { ns -> _ui.value = _ui.value.copy(settings = ns); c.synth.masterVolume = ns.volume; recompute() }
+            c.settings.flow.collect { ns -> _ui.value = _ui.value.copy(settings = ns); c.synth.masterVolume = ns.volume; c.synth.sustain = ns.sustain; recompute() }
         }
         viewModelScope.launch { c.playback.state.collect { st -> _ui.value = _ui.value.copy(playing = st == PlayState.PLAYING, pausedByFocus = st == PlayState.PAUSED_BY_FOCUS) } }
     }
@@ -149,18 +149,22 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
         _ui.value = _ui.value.copy(headphonesNeeded = _ui.value.micOn && !headphonesConnected())
     }
 
-    fun playAll() {
+    fun playAll() = playFrom(0.0)
+
+    /** Играет от позиции [beat] (в долях партии после раскрытия повторов) до конца; без отсчёта, если это перемотка. */
+    fun playFrom(beat: Double, withCountIn: Boolean = beat <= 0.0) {
         val d = _derived.value
         val end = d.voice?.notes?.maxOfOrNull { it.endBeat } ?: return
-        c.synth.masterVolume = _ui.value.settings.volume
+        if (beat >= end) return
+        c.synth.masterVolume = _ui.value.settings.volume; c.synth.sustain = _ui.value.settings.sustain
         _ui.value = _ui.value.copy(loopPhrase = null)
         refreshHeadphones()
-        c.playback.play(tracks(), 0.0, end, _ui.value.tempo, kind(), false, countIn())
+        c.playback.play(tracks(), beat.coerceAtLeast(0.0), end, _ui.value.tempo, kind(), false, if (withCountIn) countIn() else 0)
     }
 
     fun playPhrase(i: Int, loop: Boolean) {
         val ph = _derived.value.phrases.getOrNull(i) ?: return
-        c.synth.masterVolume = _ui.value.settings.volume
+        c.synth.masterVolume = _ui.value.settings.volume; c.synth.sustain = _ui.value.settings.sustain
         _ui.value = _ui.value.copy(loopPhrase = if (loop) i else null)
         refreshHeadphones()
         c.playback.play(tracks(), ph.startBeat, ph.endBeat, _ui.value.tempo, kind(), loop, if (loop) 0 else countIn())
@@ -183,7 +187,7 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
     fun tapKey(midi: Int) { _ui.value = _ui.value.copy(selectedNote = null); playMidi(midi) }
 
     private fun playMidi(midi: Int) {
-        c.synth.masterVolume = _ui.value.settings.volume
+        c.synth.masterVolume = _ui.value.settings.volume; c.synth.sustain = _ui.value.settings.sustain
         refreshHeadphones()
         c.playback.tap(midi, kind())
     }

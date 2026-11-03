@@ -153,7 +153,7 @@ class EditorViewModel(private val c: AppContainer, private val projectId: Long) 
         val b = l[to.coerceIn(0, l.lastIndex)].let { it.start + it.length }
         viewModelScope.launch {
             val s = c.settings.flow.first()
-            c.synth.masterVolume = s.volume
+            c.synth.masterVolume = s.volume; c.synth.sustain = s.sustain
             _ui.value = _ui.value.copy(playing = true)
             c.playback.play(listOf(PlayTrack(v.notes, 1f, true)), a, b, u.project?.score?.tempo ?: 85, c.synth.kindFor(s.timbre)) { _ui.value = _ui.value.copy(playing = false) }
         }
@@ -162,7 +162,7 @@ class EditorViewModel(private val c: AppContainer, private val projectId: Long) 
     fun playSelected() {
         val u = _ui.value
         val n = u.selectedNote?.let { u.voice?.notes?.getOrNull(it) } ?: return
-        viewModelScope.launch { val s = c.settings.flow.first(); c.synth.masterVolume = s.volume; c.playback.tap(n.midi, c.synth.kindFor(s.timbre)) }
+        viewModelScope.launch { val s = c.settings.flow.first(); c.synth.masterVolume = s.volume; c.synth.sustain = s.sustain; c.playback.tap(n.midi, c.synth.kindFor(s.timbre)) }
     }
 
     fun stop() { c.playback.stop(); _ui.value = _ui.value.copy(playing = false) }

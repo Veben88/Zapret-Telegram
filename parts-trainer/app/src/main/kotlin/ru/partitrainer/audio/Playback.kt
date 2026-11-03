@@ -150,7 +150,7 @@ class PlaybackEngine(context: Context, private val synth: Synth) {
                     if (nowBeat >= r.toBeat && active.isEmpty()) break
                     delay(4)
                 }
-                synth.allOff()
+                // Штатный конец: все ноты уже отпущены, их хвосты (сустейн) дозвучивают сами — allOff() оборвал бы их.
             } while (r.loop && currentCoroutineContext().isActive)
             _position.value = PlayPosition(); _state.value = PlayState.IDLE
             abandonFocus()

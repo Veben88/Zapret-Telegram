@@ -20,13 +20,19 @@ class PageTokens(
     /** Диапазоны найденных нотоносцев (для подсветки/отладки). */
     val detected: List<DetectedStaff>,
     val selected: List<DetectedStaff>,
+    /** Строки текста под каждым выбранным нотоносцем (пусто, если распознавание текста выключено). */
+    val lyrics: List<List<String>> = emptyList(),
 )
 
 /**
  * Конвейер homr на Kotlin: подготовка страницы → segnet → нотоносцы → трансформер.
  * Упрощения относительно оригинала: нет автообрезки фото и выпрямления линеек (страницы PDF прямые).
  */
-class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0, private val staffWorkers: Int = defaultWorkers()) : AutoCloseable {
+class HomrPipeline(
+    private val files: HomrModelFiles, threads: Int = 0, private val staffWorkers: Int = defaultWorkers(),
+    /** Если задан — под каждым прочитанным нотоносцем распознаётся текст (слова песни). */
+    private val text: TextRecognizer? = null,
+) : AutoCloseable {
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val opts = OrtSession.SessionOptions().apply { if (threads > 0) setIntraOpNumThreads(threads) }
     private val segSession by lazy { env.createSession(files.segnet.path, opts) }
@@ -96,8 +102,12 @@ class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0, private 
         val s2s = Staff2Score(env, encSession, decSession, vocab)
         val canvases = chosen.map { st -> staffCanvas(page, st, staves) }
         val result = predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, chosen.size, "Чтение нотоносца $done из ${chosen.size}") }
+        val lyrics = text?.let { rec ->
+            onProgress(chosen.size, chosen.size, "Распознавание текста")
+            chosen.map { st -> if (isCancelled()) throw InterruptedException("Отменено"); Lyrics.readLines(rec, page, st, nextStaffOf(st, staves)) }
+        } ?: emptyList()
         onProgress(chosen.size, chosen.size, "Страница готова")
-        return PageTokens(staves.size, result, staves, chosen)
+        return PageTokens(staves.size, result, staves, chosen, lyrics)
     }
 
     /**
@@ -134,13 +144,18 @@ class HomrPipeline(private val files: HomrModelFiles, threads: Int = 0, private 
                 val leftEdge = sys.map { it.minX }.sorted().let { it[it.size / 2] }.toDouble()
                 val octScore = StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
                 val oct = octScore > OCTAVE_MARK_THRESHOLD
-                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore)
+                val lines = text?.let { rec -> Lyrics.readLines(rec, page, st, nextStaffOf(st, staves)) } ?: emptyList()
+                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore, lines)
             }
             out += reads
         }
         onProgress(total, total, "Страница готова")
         return out
     }
+
+    /** Следующий по высоте нотоносец страницы (ограничивает область текста снизу). */
+    private fun nextStaffOf(st: DetectedStaff, all: List<DetectedStaff>): DetectedStaff? =
+        all.filter { it.minY > st.minY && it !== st }.minByOrNull { it.minY }
 
     /**
      * Читает нотоносцы (энкодер+декодер) в нескольких потоках: шаг декодера — много мелких операций, одному потоку

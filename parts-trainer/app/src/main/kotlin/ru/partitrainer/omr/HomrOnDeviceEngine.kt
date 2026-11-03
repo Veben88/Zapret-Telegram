@@ -16,13 +16,19 @@ import ru.partitrainer.omr.homr.StaffRead
 import ru.partitrainer.omr.homr.GrayImage
 import ru.partitrainer.omr.homr.HomrPipeline
 import ru.partitrainer.omr.homr.StaffDetector
+import ru.partitrainer.omr.homr.TextRecognizer
+import ru.partitrainer.omr.homr.Lyrics
 import ru.partitrainer.omr.homr.TokenParser
 
 /**
  * Движок «На устройстве»: нейросети homr (segnet + трансформер) через ONNX Runtime, полностью офлайн.
  * Конвейер портирован на Kotlin и проверен против Python-homr (см. docs/OMR_ON_DEVICE.md).
  */
-class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
+class HomrOnDeviceEngine(
+    private val models: HomrModelManager,
+    /** Создаёт распознаватель слов песни (если включено «Распознавать слова»); null — без текста. */
+    private val textFactory: (() -> TextRecognizer?)? = null,
+) : OmrEngine {
     override val id = EngineId.ON_DEVICE
 
     override suspend fun availability(): Availability =
@@ -42,9 +48,11 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
         }
         val ctx = currentCoroutineContext()
         val tokens = ArrayList<List<EncodedSymbol>>()
+        val lines = ArrayList<List<String>>()
+        val text = if (request.lyrics) textFactory?.invoke() else null
         try {
             withContext(Dispatchers.Default) {
-                HomrPipeline(files, threads = CpuTopology.performanceThreads()).use { pipeline ->
+                HomrPipeline(files, threads = CpuTopology.performanceThreads(), text = text).use { pipeline ->
                     for ((i, page) in request.pages.withIndex()) {
                         ctx.ensureActive()
                         onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: подготовка"))
@@ -56,6 +64,7 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
                             isCancelled = { !ctx.isActive },
                         )
                         tokens += r.staffs
+                        lines += r.staffs.indices.map { r.lyrics.getOrNull(it).orEmpty() }
                         onProgress(OmrProgress(i + 1, request.pages.size, "Страница ${page + 1} готова"))
                     }
                 }
@@ -70,7 +79,7 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
         if (tokens.isEmpty() || tokens.all { it.isEmpty() }) {
             throw OmrException("Нотоносцы на страницах не найдены. Проверьте, что страница ровная и чёткая, или введите ноты вручную.", offerManual = true)
         }
-        return TokenParser.parse(tokens)
+        return TokenParser.parse(tokens, syllables = if (text != null) Lyrics.forStaffs(tokens, lines) else emptyList())
     }
 
     private suspend fun recognizeChoir(files: ru.partitrainer.omr.homr.HomrModelFiles, request: OmrRequest, onProgress: (OmrProgress) -> Unit): OmrParsed {
@@ -80,6 +89,8 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
         }
         val ctx = currentCoroutineContext()
         val tokens = ArrayList<List<EncodedSymbol>>()
+        val lines = ArrayList<List<String>>()
+        val text = if (request.lyrics) textFactory?.invoke() else null
         var shift = 0
         try {
             withContext(Dispatchers.Default) {
@@ -89,17 +100,18 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
                         ctx.ensureActive()
                         val systems = choirPages[page] ?: run {
                             onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: подготовка"))
-                            val p = pipeline ?: HomrPipeline(files, threads = CpuTopology.performanceThreads()).also { pipeline = it }
+                            val p = pipeline ?: HomrPipeline(files, threads = CpuTopology.performanceThreads(), text = text).also { pipeline = it }
                             val bmp = request.provider.render(page)
                             val gray = try { toGray(bmp) } finally { bmp.recycle() }
                             p.recognizeAll(gray, accurate = request.accurate, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive })
                                 .also { choirPages[page] = it }
                         }
                         if (request.twoStaffChoir) {
-                            tokens += ChoirAssigner.tokensForTwoStaff(voice, systems)
+                            val t = ChoirAssigner.tokensWithLyricsTwoStaff(voice, systems)
+                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }
                         } else {
-                            val (t, s) = ChoirAssigner.tokensFor(voice, systems)
-                            tokens += t; if (s != 0) shift = s
+                            val (t, s) = ChoirAssigner.tokensWithLyrics(voice, systems)
+                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; if (s != 0) shift = s
                         }
                         onProgress(OmrProgress(i + 1, request.pages.size, "Страница ${page + 1} готова"))
                     }
@@ -115,7 +127,7 @@ class HomrOnDeviceEngine(private val models: HomrModelManager) : OmrEngine {
         if (tokens.isEmpty() || tokens.all { it.isEmpty() }) {
             throw OmrException("Нотоносцы на страницах не найдены. Проверьте, что страница ровная и чёткая, или введите ноты вручную.", offerManual = true)
         }
-        return TokenParser.parse(tokens, shift)
+        return TokenParser.parse(tokens, shift, if (text != null) Lyrics.forStaffs(tokens, lines) else emptyList())
     }
 
     private fun toGray(bmp: Bitmap): GrayImage {

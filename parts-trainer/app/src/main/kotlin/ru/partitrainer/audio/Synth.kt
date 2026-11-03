@@ -29,16 +29,19 @@ class Synth {
 
     private class Voice(
         val handle: Long, val key: Int, val kind: Kind, val gain: Float, val sampleRate: Int,
-        val low: FloatArray, val high: FloatArray?, val inc: Double,
+        val low: FloatArray, val high: FloatArray?, val inc: Double, val sustain: Float,
     ) {
         var phase = 0.0
         var t = 0L                    // сэмплов с начала
         var level = 0f                // огибающая атаки/релиза 0..1
         var releasing = false
-        var relStep = 0f
+        var relInc = 0f               // шаг прогресса релиза 0..1 за сэмпл
+        var relPos = 0f
+        var relStart = 1f
         val attackStep = when (kind) { Kind.AAH -> 1f / (0.05f * sampleRate); Kind.PIANO -> 1f / (0.006f * sampleRate); Kind.CLICK -> 1f }
-        val releaseSamples = when (kind) { Kind.AAH -> 0.12f; Kind.PIANO -> 0.09f; Kind.CLICK -> 0.01f } * sampleRate
-        val tauLow = when (kind) { Kind.PIANO -> (2.4 - 0.025 * (key - 48)).coerceIn(0.5, 3.0) * sampleRate; else -> 1e12 }
+        // Сустейн удлиняет «хвост» после конца ноты (как педаль): звук не обрывается, а плавно затухает в паузе.
+        val releaseSamples = (when (kind) { Kind.AAH -> 0.12f + 0.55f * sustain; Kind.PIANO -> 0.09f + 1.8f * sustain; Kind.CLICK -> 0.01f }) * sampleRate
+        val tauLow = when (kind) { Kind.PIANO -> (2.4 - 0.025 * (key - 48)).coerceIn(0.5, 3.0) * (1.0 + 1.2 * sustain) * sampleRate; else -> 1e12 }
         val tauHigh = tauLow * 0.22
         var done = false
 
@@ -46,7 +49,9 @@ class Synth {
             if (releasing) return
             releasing = true
             val samples = if (fast) 0.015f * sampleRate else releaseSamples
-            relStep = level.coerceAtLeast(0.001f) / samples
+            relStart = level.coerceAtLeast(0.001f)
+            relPos = 0f
+            relInc = 1f / samples
         }
     }
 
@@ -57,6 +62,8 @@ class Synth {
     @Volatile private var running = false
     @Volatile var masterVolume: Float = 0.8f
     @Volatile var duck: Float = 1f
+    /** Сустейн 0..1: длина затухания после конца ноты. */
+    @Volatile var sustain: Float = 0.5f
 
     private val sampleRate = 44100
     private val tables = HashMap<Long, FloatArray>()
@@ -151,8 +158,10 @@ class Synth {
         for (i in 0 until n) {
             // огибающая
             if (v.releasing) {
-                v.level -= v.relStep
-                if (v.level <= 0f) { v.done = true; return }
+                v.relPos += v.relInc
+                if (v.relPos >= 1f) { v.done = true; return }
+                val k = 1f - v.relPos
+                v.level = v.relStart * k * k      // квадратичный спад: тихий длинный хвост без «ступеньки»
             } else if (v.level < 1f) {
                 v.level = (v.level + v.attackStep).coerceAtMost(1f)
             }
@@ -189,7 +198,7 @@ class Synth {
         val freq = 440.0 * Math.pow(2.0, (c.midi - 69) / 12.0)
         val (low, high) = tablesFor(c.kind, c.midi, freq)
         val f = if (c.kind == Kind.CLICK) 1500.0 else freq
-        return Voice(c.handle, c.midi, c.kind, c.gain, sampleRate, low, high, f / sampleRate)
+        return Voice(c.handle, c.midi, c.kind, c.gain, sampleRate, low, high, f / sampleRate, sustain.coerceIn(0f, 1f))
     }
 
     private fun tablesFor(kind: Kind, midi: Int, freq: Double): Pair<FloatArray, FloatArray?> {

@@ -11,6 +11,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -79,6 +80,12 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
 
     val voice = d.voice
     val notes = voice?.notes.orEmpty()
+    val totalBeats = notes.maxOfOrNull { it.endBeat } ?: 0.0
+    val active = ui.playing || ui.pausedByFocus
+    // Текущая фраза под указателем (только пока играет): первая, чей конец ещё впереди
+    val curPhrase = if (active && d.phrases.isNotEmpty()) d.phrases.indexOfFirst { pos.beat < it.endBeat - 1e-9 }.let { if (it < 0) d.phrases.lastIndex else it } else -1
+    val listState = rememberLazyListState()
+    LaunchedEffect(curPhrase) { if (curPhrase >= 0) listState.animateScrollToItem(if (wide) curPhrase else curPhrase + 1) }
     val targets: Set<Int> = buildSet {
         pos.activeMain.forEach { notes.getOrNull(it)?.let { n -> add(n.midi) } }
         ui.selectedNote?.let { notes.getOrNull(it)?.let { n -> add(n.midi) } }
@@ -109,6 +116,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
             bottomBar = {
                 Surface(tonalElevation = 3.dp) {
                     Column {
+                        if (totalBeats > 0) PlayheadBar(pos.beat, pos.countInBeat, totalBeats, active, d, notes, curPhrase, { b -> vm.playFrom(b) }, vm::stop)
                         if (ui.micOn) MicPanel(ui, vm)
                         PianoKeyboard(kbLow, kbHigh, notation, targets, pos.activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::tapKey, Modifier.padding(vertical = 6.dp))
                     }
@@ -120,15 +128,17 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
                 scope.itemsIndexed(d.phrases) { i, ph ->
                     PhraseCard(i, ph, notes.subList(ph.from, ph.to), ph.from, d.voice?.kind, notation, pos.activeMain,
                         singActive = ui.singing?.takeIf { it.phrase == i }?.activeIndex, selected = ui.selectedNote,
-                        looping = ui.loopPhrase == i, playing = ui.playing, onNote = vm::tapNote,
+                        looping = ui.loopPhrase == i, playing = ui.playing,
+                        progress = if (i == curPhrase) ((pos.beat - ph.startBeat) / (ph.endBeat - ph.startBeat).coerceAtLeast(1e-6)).toFloat().coerceIn(0f, 1f) else null,
+                        onNote = vm::tapNote,
                         onPlay = { vm.playPhrase(i, false) }, onLoop = { vm.playPhrase(i, true) }, onStop = vm::stop,
                         onSing = { withMic(i) }, bpmBeats = d.bpm)
                 }
             }
             if (wide) Row(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                LazyColumn(Modifier.weight(0.6f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp)) { phrases(this) }
+                LazyColumn(Modifier.weight(0.6f).fillMaxHeight(), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp)) { phrases(this) }
                 Column(Modifier.weight(0.4f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) { controls() }
-            } else LazyColumn(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
+            } else LazyColumn(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
                 item { controls() }
                 phrases(this)
             }
@@ -253,6 +263,9 @@ private fun Controls(vm: TrainerViewModel, ui: TrainerUi, d: Derived, onMic: () 
             }
             Text(stringResource(R.string.volume), style = MaterialTheme.typography.labelMedium)
             Slider(ui.settings.volume, { v -> vm.updateSettings { it.copy(volume = v) } })
+            Text(stringResource(R.string.sustain_label, (ui.settings.sustain * 100).roundToInt()), style = MaterialTheme.typography.labelMedium)
+            Slider(ui.settings.sustain, { v -> vm.updateSettings { it.copy(sustain = v) } }, modifier = Modifier.semantics { contentDescription = "sustain" })
+            Text(stringResource(R.string.sustain_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
             // Микрофон
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -265,6 +278,39 @@ private fun Controls(vm: TrainerViewModel, ui: TrainerUi, d: Derived, onMic: () 
             }
             ui.micError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
+    }
+}
+
+/**
+ * Бегущий указатель: ползунок по всей партии, текущая фраза и такт. Пока звучит — движется сам;
+ * можно потянуть в любое место (воспроизведение продолжится оттуда).
+ */
+@Composable
+private fun PlayheadBar(
+    beat: Double, countIn: Int, total: Double, active: Boolean, d: Derived, notes: List<Note>, curPhrase: Int,
+    onSeek: (Double) -> Unit, onStop: () -> Unit,
+) {
+    var drag by remember { mutableStateOf<Float?>(null) }
+    var lastSeek by remember { mutableStateOf(0f) }
+    val live = if (active) (beat / total).toFloat().coerceIn(0f, 1f) else lastSeek
+    val value = drag ?: live
+    val shownBeat = (value * total)
+    // Такт под указателем: ближайшая слева нота (с учётом повторов её номер — из нотного текста)
+    val measure = notes.lastOrNull { it.startBeat <= shownBeat + 1e-6 }?.measure ?: notes.firstOrNull()?.measure ?: 1
+    val phraseIdx = if (curPhrase >= 0) curPhrase else d.phrases.indexOfFirst { shownBeat < it.endBeat - 1e-9 }.let { if (it < 0) d.phrases.lastIndex else it }
+    val label = if (countIn > 0 && active) stringResource(R.string.playhead_count_in, countIn)
+    else stringResource(R.string.playhead_pos, phraseIdx + 1, d.phrases.size, measure)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            if (active) TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
+        }
+        Slider(
+            value = value,
+            onValueChange = { drag = it },
+            onValueChangeFinished = { drag?.let { v -> lastSeek = v; onSeek(v * total) }; drag = null },
+            modifier = Modifier.semantics { contentDescription = "playhead" },
+        )
     }
 }
 
@@ -296,7 +342,7 @@ private fun MicPanel(ui: TrainerUi, vm: TrainerViewModel) {
 @Composable
 private fun PhraseCard(
     index: Int, phrase: Phrase, notes: List<Note>, firstIndex: Int, kind: ru.partitrainer.core.model.VoiceKind?, notation: Notation,
-    activeMain: Set<Int>, singActive: Int?, selected: Int?, looping: Boolean, playing: Boolean,
+    activeMain: Set<Int>, singActive: Int?, selected: Int?, looping: Boolean, playing: Boolean, progress: Float?,
     onNote: (Int) -> Unit, onPlay: () -> Unit, onLoop: () -> Unit, onStop: () -> Unit, onSing: () -> Unit, bpmBeats: Double,
 ) {
     val m1 = notes.firstOrNull()?.measure ?: (Math.floor(phrase.startBeat / bpmBeats + 1e-9).toInt() + 1)
@@ -309,6 +355,7 @@ private fun PhraseCard(
                 FilledTonalIconToggleButton(checked = looping, onCheckedChange = { if (it) onLoop() else onStop() }) { Icon(Icons.Default.Repeat, stringResource(R.string.loop_phrase, index + 1)) }
                 IconButton(onClick = onSing) { Icon(Icons.Default.Mic, stringResource(R.string.sing_phrase, index + 1)) }
             }
+            if (progress != null) LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth().semantics { contentDescription = "phrase progress" })
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 notes.forEachIndexed { k, n ->
                     val gi = firstIndex + k

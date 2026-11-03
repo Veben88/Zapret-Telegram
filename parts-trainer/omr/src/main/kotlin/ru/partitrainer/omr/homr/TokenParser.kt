@@ -32,7 +32,7 @@ object TokenParser {
         return (base + alter).coerceIn(0, 127)
     }
 
-    private class Ev(val midi: Int?, val beats: Double, var tie: Boolean, val slur: String)
+    private class Ev(val midi: Int?, val beats: Double, var tie: Boolean, val slur: String, var syl: String? = null)
 
     private class Builder {
         val events = ArrayList<Ev>()
@@ -41,8 +41,26 @@ object TokenParser {
         fun total() = events.sumOf { if (it.beats == FILL) 0.0 else it.beats }
     }
 
-    /** @param staffs токены каждого нотоносца в порядке чтения. */
-    fun parse(staffs: List<List<EncodedSymbol>>, transpose: Int = 0): OmrParsed {
+    /**
+     * Сколько нот нотоносца могут нести слог: все ноты, кроме продолжений лиг (залигованная нота поётся одним слогом).
+     */
+    fun syllableSlots(staff: List<EncodedSymbol>): Int =
+        parse(listOf(staff)).measures.flatMap { it.events }.let { evs ->
+            var prevTied = false
+            var n = 0
+            for (e in evs) {
+                if (e.midi == null) { prevTied = false; continue }
+                if (!prevTied) n++
+                prevTied = e.tie
+            }
+            n
+        }
+
+    /**
+     * @param staffs токены каждого нотоносца в порядке чтения.
+     * @param syllables слоги по нотоносцам (параллельно [staffs]), по одному на «слоговую» ноту (см. [syllableSlots]); null — без слога.
+     */
+    fun parse(staffs: List<List<EncodedSymbol>>, transpose: Int = 0, syllables: List<List<String?>> = emptyList()): OmrParsed {
         var fifths: Int? = null
         val sigs = java.util.TreeMap<Int, Int>()   // номер такта → знаменатель размера
         val pendingSigs = ArrayList<Int>()          // знаки размера, ещё не привязанные к такту
@@ -58,7 +76,9 @@ object TokenParser {
             cur = Builder().also { if (inVolta) it.ending = volta }
         }
 
-        for (symbols in staffs) {
+        for ((staffIdx, symbols) in staffs.withIndex()) {
+            val sylQueue = syllables.getOrNull(staffIdx).orEmpty()
+            var sylPos = 0
             // группы аккордов: символ после «chord» относится к предыдущей группе
             val groups = ArrayList<MutableList<EncodedSymbol>>()
             var inChord = false
@@ -98,7 +118,8 @@ object TokenParser {
                         val ev = Ev(((best.first + transpose).coerceIn(0, 127)), b, false, best.second.slur)
                         // лига: slurStart на предыдущей ноте и slurStop на этой с той же высотой
                         val p = prevEvent
-                        if (p != null && p.midi == ev.midi && p.slur.contains("slurStart") && ev.slur.contains("slurStop")) p.tie = true
+                        val continuation = p != null && p.midi == ev.midi && p.slur.contains("slurStart") && ev.slur.contains("slurStop")
+                        if (continuation) p!!.tie = true else ev.syl = sylQueue.getOrNull(sylPos++)
                         cur.events += ev; prevEvent = ev
                     }
                     else -> {}
@@ -148,7 +169,7 @@ object TokenParser {
             OmrMeasure(
                 n = i + 1, chord = null,
                 pickup = i == 0 && b.events.none { it.beats == FILL } && b.total() < mt.len - 0.02 && measures.size > 1,
-                events = b.events.map { OmrEvent(it.midi, if (it.beats == FILL) mt.len else it.beats, it.tie, null) },
+                events = b.events.map { OmrEvent(it.midi, if (it.beats == FILL) mt.len else it.beats, it.tie, it.syl) },
                 repeatStart = b.repeatStart, repeatEnd = b.repeatEnd, ending = b.ending, marks = emptyList(),
                 timeNum = mt.num, timeDen = mt.den,
             )

@@ -90,6 +90,14 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
                 Switch(s.omrAccurate, { v -> vm.update { it.copy(omrAccurate = v) } })
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.omr_lyrics))
+                    Text(stringResource(R.string.omr_lyrics_hint), style = MaterialTheme.typography.bodySmall)
+                    if (s.omrLyrics && !hasKey) Text(stringResource(R.string.omr_lyrics_nokey), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                Switch(s.omrLyrics, { v -> vm.update { it.copy(omrLyrics = v) } })
+            }
             OutlinedButton(onClick = vm::clearCache, Modifier.heightIn(min = 48.dp)) { Text(stringResource(if (cleared) R.string.cache_cleared else R.string.clear_cache)) }
 
             HorizontalDivider()
