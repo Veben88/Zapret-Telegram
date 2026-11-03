@@ -90,7 +90,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     val voice = d.voice
     val notes = voice?.notes.orEmpty()
     val totalBeats = notes.maxOfOrNull { it.endBeat } ?: 0.0
-    val active = ui.playing || ui.pausedByFocus
+    val active = ui.playing || ui.pausedByFocus || ui.paused
     val listState = rememberLazyListState()
     LaunchedEffect(curPhrase) { if (curPhrase >= 0) listState.animateScrollToItem(curPhrase + 1) }
     val targets: Set<Int> = buildSet {
@@ -102,7 +102,7 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
     val kbHigh = (d.range?.high ?: 76) + 2
 
     val transport: @Composable () -> Unit = {
-        if (totalBeats > 0) PlayheadBar(beatState, countIn, totalBeats, active, d, notes, curPhrase, { b -> vm.playFrom(b) }, vm::stop)
+        if (totalBeats > 0) PlayheadBar(beatState, countIn, totalBeats, active, ui.playing, d, notes, curPhrase, { b -> vm.playFrom(b) }, vm::stop, onPause = vm::pause, onResume = vm::resumePlayback)
     }
     val keyboard: @Composable () -> Unit = {
         PianoKeyboard(kbLow, kbHigh, notation, targets, activeMain.mapNotNull { notes.getOrNull(it)?.midi }.toSet(), vm::tapKey, Modifier.padding(vertical = 6.dp))
@@ -265,6 +265,8 @@ private fun Controls(vm: TrainerViewModel, ui: TrainerUi, d: Derived, onMic: () 
             // Воспроизведение
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(onClick = vm::playAll, Modifier.heightIn(min = 48.dp)) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.play_all)) }
+                if (ui.playing) FilledTonalButton(onClick = vm::pause, Modifier.heightIn(min = 48.dp)) { Icon(Icons.Default.Pause, null); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.pause)) }
+                else if (ui.paused) FilledTonalButton(onClick = vm::resumePlayback, Modifier.heightIn(min = 48.dp)) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.resume)) }
                 OutlinedButton(onClick = vm::stop, Modifier.heightIn(min = 48.dp)) { Icon(Icons.Default.Stop, null); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.stop)) }
             }
             if (ui.pausedByFocus) Text(stringResource(R.string.paused_focus), color = MaterialTheme.colorScheme.tertiary)
@@ -336,8 +338,8 @@ private fun Controls(vm: TrainerViewModel, ui: TrainerUi, d: Derived, onMic: () 
  */
 @Composable
 private fun PlayheadBar(
-    beatState: State<Double>, countIn: Int, total: Double, active: Boolean, d: Derived, notes: List<Note>, curPhrase: Int,
-    onSeek: (Double) -> Unit, onStop: () -> Unit,
+    beatState: State<Double>, countIn: Int, total: Double, active: Boolean, playing: Boolean, d: Derived, notes: List<Note>, curPhrase: Int,
+    onSeek: (Double) -> Unit, onStop: () -> Unit, onPause: () -> Unit, onResume: () -> Unit,
 ) {
     var drag by remember { mutableStateOf<Float?>(null) }
     var lastSeek by remember { mutableStateOf(0f) }
@@ -352,7 +354,12 @@ private fun PlayheadBar(
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-            if (active) TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
+            if (active) {
+                IconButton(onClick = if (playing) onPause else onResume) {
+                    if (playing) Icon(Icons.Default.Pause, stringResource(R.string.pause)) else Icon(Icons.Default.PlayArrow, stringResource(R.string.resume))
+                }
+                TextButton(onClick = onStop) { Text(stringResource(R.string.stop)) }
+            }
         }
         Slider(
             value = value,

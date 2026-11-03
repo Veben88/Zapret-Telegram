@@ -80,6 +80,7 @@ data class TrainerUi(
     val singResultPhrase: Int? = null,
     val headphonesNeeded: Boolean = false,
     val pausedByFocus: Boolean = false,
+    val paused: Boolean = false,
     /** Где такты на страницах исходника; null — нет исходника, нет раскладки или она не совпадает с числом тактов. */
     val layout: ru.partitrainer.core.omr.SourceLayout? = null,
 )
@@ -98,12 +99,12 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
 
     /** Фраза под указателем (−1, если не играет). Меняется редко. */
     val curPhrase: StateFlow<Int> = combine(beat, _derived, _ui) { b, d, u ->
-        if ((u.playing || u.pausedByFocus) && d.phrases.isNotEmpty()) d.phrases.indexOfFirst { b < it.endBeat - 1e-9 }.let { if (it < 0) d.phrases.lastIndex else it } else -1
+        if ((u.playing || u.pausedByFocus || u.paused) && d.phrases.isNotEmpty()) d.phrases.indexOfFirst { b < it.endBeat - 1e-9 }.let { if (it < 0) d.phrases.lastIndex else it } else -1
     }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.Eagerly, -1)
 
     /** Такт напечатанных нот под кареткой (−1, если не играет). */
     val curMeasure: StateFlow<Int> = combine(beat, _derived, _ui) { b, d, u ->
-        if (!(u.playing || u.pausedByFocus)) -1
+        if (!(u.playing || u.pausedByFocus || u.paused)) -1
         else {
             val ob = d.playMap.originalBeat(b)
             d.playMap.originalMeasure(b).takeIf { it >= 0 && d.playMap.expanded } ?: d.measureStarts.indexOfLast { it <= ob + 1e-9 }
@@ -133,7 +134,7 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
             recompute()
             c.settings.flow.collect { ns -> _ui.value = _ui.value.copy(settings = ns); c.synth.masterVolume = ns.volume; c.synth.sustain = ns.sustain }
         }
-        viewModelScope.launch { c.playback.state.collect { st -> _ui.value = _ui.value.copy(playing = st == PlayState.PLAYING, pausedByFocus = st == PlayState.PAUSED_BY_FOCUS) } }
+        viewModelScope.launch { c.playback.state.collect { st -> _ui.value = _ui.value.copy(playing = st == PlayState.PLAYING, pausedByFocus = st == PlayState.PAUSED_BY_FOCUS, paused = st == PlayState.PAUSED) } }
     }
 
     private fun recompute() {
@@ -219,6 +220,9 @@ class TrainerViewModel(private val c: AppContainer, private val projectId: Long)
     }
 
     private fun countIn() = if (_ui.value.settings.countIn) (_ui.value.project?.score?.timeNum ?: 4) else 0
+
+    fun pause() = c.playback.pause()
+    fun resumePlayback() = c.playback.resumePlayback()
 
     fun stop() {
         c.playback.stop()

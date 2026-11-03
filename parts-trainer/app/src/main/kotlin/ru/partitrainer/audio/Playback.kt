@@ -22,7 +22,7 @@ data class PlayTrack(val notes: List<Note>, val gain: Float, val main: Boolean)
 
 data class PlayPosition(val beat: Double = 0.0, val activeMain: Set<Int> = emptySet(), val countInBeat: Int = 0)
 
-enum class PlayState { IDLE, PLAYING, PAUSED_BY_FOCUS }
+enum class PlayState { IDLE, PLAYING, PAUSED, PAUSED_BY_FOCUS }
 
 /**
  * Воспроизведение по таймлайну + аудиофокус.
@@ -41,6 +41,7 @@ class PlaybackEngine(context: Context, private val synth: Synth) {
 
     @Volatile private var pausedByFocus = false
     private var lastRequest: Request? = null
+    @Volatile private var pausedBeat = 0.0
 
     private class Request(
         val tracks: List<PlayTrack>, val fromBeat: Double, val toBeat: Double, val bpm: Int,
@@ -52,13 +53,14 @@ class PlaybackEngine(context: Context, private val synth: Synth) {
             AudioManager.AUDIOFOCUS_LOSS -> { pausedByFocus = false; stop() }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> if (_state.value == PlayState.PLAYING) {
                 pausedByFocus = true
+                pausedBeat = _position.value.beat
                 job?.cancel(); synth.allOff()
                 _state.value = PlayState.PAUSED_BY_FOCUS
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> synth.duck = 0.25f
             AudioManager.AUDIOFOCUS_GAIN -> {
                 synth.duck = 1f
-                if (pausedByFocus) { pausedByFocus = false; lastRequest?.let { r -> resume(r) } }
+                if (pausedByFocus) { pausedByFocus = false; resumeFromPaused() }
             }
         }
     }
@@ -91,6 +93,28 @@ class PlaybackEngine(context: Context, private val synth: Synth) {
         lastRequest = r
         if (!requestFocus()) return
         resume(r)
+    }
+
+    /** Пауза: звук стихает, позиция и каретка остаются на месте; [resumePlayback] продолжит с этого места. */
+    fun pause() {
+        if (_state.value != PlayState.PLAYING) return
+        pausedBeat = _position.value.beat
+        job?.cancel(); job = null
+        synth.allOff()
+        _state.value = PlayState.PAUSED
+        abandonFocus()
+    }
+
+    fun resumePlayback() {
+        if (_state.value != PlayState.PAUSED) return
+        if (!requestFocus()) return
+        resumeFromPaused()
+    }
+
+    /** Продолжить с места паузы (повторяющуюся фразу — сначала); отсчёт не повторяется. */
+    private fun resumeFromPaused() {
+        val r = lastRequest ?: return
+        resume(if (r.loop) r else Request(r.tracks, pausedBeat.coerceIn(r.fromBeat, r.toBeat), r.toBeat, r.bpm, false, 0, r.kind, r.onFinished))
     }
 
     private fun resume(r: Request) {
