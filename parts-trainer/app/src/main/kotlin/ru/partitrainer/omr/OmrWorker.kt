@@ -34,12 +34,14 @@ data class OmrJob(
     val twoStaffChoir: Boolean = false,
     val accurate: Boolean = false,
     val lyrics: Boolean = false,
+    /** Партии, отмеченные после предварительного просмотра (PartPick.encode); пусто — по [staff]. */
+    val parts: List<String> = emptyList(),
 ) {
-    fun cacheKey() = "$hash|${engine.name}|${pages.zip(rotations).joinToString(",") { "${it.first}r${it.second}" }}|${staff.key}${if (twoStaffChoir) "|2s" else ""}${if (accurate) "|acc" else ""}${if (lyrics) "|lyr" else ""}"
+    fun cacheKey() = "$hash|${engine.name}|${pages.zip(rotations).joinToString(",") { "${it.first}r${it.second}" }}|${staff.key}${if (twoStaffChoir) "|2s" else ""}${if (accurate) "|acc" else ""}${if (lyrics) "|lyr" else ""}${if (parts.isNotEmpty()) "|parts:" + parts.joinToString(";").hashCode() else ""}"
 
     fun toData(): Data = workDataOf(
         "path" to filePath, "hash" to hash, "pdf" to isPdf, "title" to title,
-        "pages" to pages.toIntArray(), "rot" to rotations.toIntArray(), "staff" to staff.key, "engine" to engine.name, "twoStaff" to twoStaffChoir, "accurate" to accurate, "lyrics" to lyrics,
+        "pages" to pages.toIntArray(), "rot" to rotations.toIntArray(), "staff" to staff.key, "engine" to engine.name, "twoStaff" to twoStaffChoir, "accurate" to accurate, "lyrics" to lyrics, "parts" to parts.joinToString("\n"),
     )
 
     companion object {
@@ -47,6 +49,7 @@ data class OmrJob(
             d.getString("path")!!, d.getString("hash")!!, d.getBoolean("pdf", true), d.getString("title") ?: "Без названия",
             d.getIntArray("pages")!!.toList(), d.getIntArray("rot")!!.toList(), StaffSelection.fromKey(d.getString("staff")),
             EngineId.valueOf(d.getString("engine")!!), d.getBoolean("twoStaff", false), d.getBoolean("accurate", false), d.getBoolean("lyrics", false),
+            d.getString("parts")?.split("\n")?.filter { it.isNotBlank() }.orEmpty(),
         )
         const val TAG = "omr"
         const val KEY_PROJECT = "projectId"
@@ -108,26 +111,38 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
 
         PageRenderer(File(job.filePath), job.isPdf).use { renderer ->
             val rotByPage = job.pages.zip(job.rotations).toMap()
-            val staffs = job.staff.expand()
-            val totalUnits = job.pages.size * staffs.size
+            // что распознаём: партии из предварительного просмотра или строки по выбору
+            val picks = job.parts.mapNotNull { ru.partitrainer.omr.homr.PartPick.decode(it) }
+            val units: List<Pair<StaffSelection, ru.partitrainer.omr.homr.PartPick?>> =
+                if (picks.isNotEmpty()) picks.map { job.staff to it } else job.staff.expand().map { it to null }
+            val totalUnits = job.pages.size * units.size
             val voices = ArrayList<ru.partitrainer.core.model.Voice>()
             var base: ClaudeOmr.Assembled? = null
             var layout: ru.partitrainer.core.omr.SourceLayout? = null
             try {
-                for ((si, staff) in staffs.withIndex()) {
-                    val parsed = engine.recognize(OmrRequest(job.pages, staff, { p -> renderer.renderForOmr(p, rotByPage[p] ?: 0) }, job.twoStaffChoir, job.accurate, job.lyrics)) { pr ->
+                for ((si, unit) in units.withIndex()) {
+                    val (staff, pick) = unit
+                    val voiceId = if (pick != null) "omr_part_$si" else "omr_${staff.key}"
+                    val parsed = engine.recognize(OmrRequest(job.pages, staff, { p -> renderer.renderForOmr(p, rotByPage[p] ?: 0) }, job.twoStaffChoir, job.accurate, job.lyrics, pick)) { pr ->
                         val done = si * job.pages.size + pr.done
                         // Сообщение о ходе работы и счётчики (setProgress в корутине — через launch не нужен: вызываем из колбэка синхронно)
                         publish(done, totalUnits, pr.message)
                     }
-                    val asm = ClaudeOmr.assemble(parsed, staff.voiceLabel)
+                    val asm = ClaudeOmr.assemble(parsed, pick?.name ?: staff.voiceLabel)
                     if (base == null) {
                         base = asm
                         layout = parsed.layout?.let { l -> l.copy(pages = l.pages.map { p -> p.copy(rotation = rotByPage[p.index] ?: 0) }, notes = emptyMap()) }
                     }
                     // положения нот — для каждого голоса свои
-                    parsed.layout?.notes?.get("")?.let { n -> layout = layout?.let { l -> l.copy(notes = l.notes + ("omr_${staff.key}" to n)) } }
-                    voices += asm.score.voices.single().copy(id = "omr_${staff.key}", kind = staff.kind)
+                    parsed.layout?.notes?.get("")?.let { n -> layout = layout?.let { l -> l.copy(notes = l.notes + (voiceId to n)) } }
+                    val kind = when (pick?.kind) {
+                        null -> if (pick?.piano == true) ru.partitrainer.core.model.VoiceKind.OTHER else staff.kind
+                        ru.partitrainer.omr.homr.ChoirVoice.SOPRANO -> ru.partitrainer.core.model.VoiceKind.SOPRANO
+                        ru.partitrainer.omr.homr.ChoirVoice.ALTO -> ru.partitrainer.core.model.VoiceKind.ALTO
+                        ru.partitrainer.omr.homr.ChoirVoice.TENOR -> ru.partitrainer.core.model.VoiceKind.TENOR
+                        ru.partitrainer.omr.homr.ChoirVoice.BASS -> ru.partitrainer.core.model.VoiceKind.BASS
+                    }
+                    voices += asm.score.voices.single().copy(id = voiceId, kind = kind)
                 }
             } catch (e: OmrException) {
                 return Result.failure(workDataOf(OmrJob.KEY_ERROR to e.userMessage, OmrJob.KEY_MANUAL to e.offerManual))

@@ -821,4 +821,43 @@ class HomrReferenceTest {
             println("ATT notes $n, inside their staff $inside")
         }
     }
+
+    /** Быстрый поиск партий: HOMR_PARTS=dir:p1,... — найденные партии и время. */
+    @Test fun scanParts() {
+        val spec = System.getenv("HOMR_PARTS")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val t0 = System.currentTimeMillis()
+                    val sys = pl.scanSystem(loadGray(File(dir, "$name.png")))
+                    val parts = Parts.describe(sys)
+                    println("PARTS $name (${System.currentTimeMillis() - t0} ms): " + parts.joinToString(", ") { "${it.name}[${it.staffIndex}${if (it.stemVoice > 0) "/v" + it.stemVoice else ""}]" } +
+                        "  | clefs " + sys.joinToString(" ") { "${it.clef}${if (it.octave8) "8" else ""}:${it.medianMidi}" })
+                }
+            }
+        }
+    }
+
+    /** Партии из просмотра одной страницы → распознавание всех страниц: HOMR_PARTREC=dir:scanPage:p1,p2,... */
+    @Test fun partsAcrossPages() {
+        val spec = System.getenv("HOMR_PARTREC")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val (dir, scanPage, names) = spec!!.split(':')
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            val parts = Parts.describe(pl.scanSystem(loadGray(File(dir, "$scanPage.png"))))
+            println("PARTREC parts: " + parts.joinToString { it.name })
+            val pages = names.split(',').map { pl.recognizeAll(loadGray(File(dir, "$it.png"))) }
+            for (p in Parts.describe(pl.scanSystem(loadGray(File(dir, "$scanPage.png"))))) {
+                val all = pages.flatMap { Parts.tokensFor(p, it).first.map { st -> st.tokens } }
+                val parsed = TokenParser.parse(all, Parts.tokensFor(p, pages.first()).second)
+                val notes = ru.partitrainer.core.omr.ClaudeOmr.assemble(parsed).score.voices.single().notes
+                val bad = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(parsed).size
+                println("PARTREC ${p.name}: measures ${parsed.measures.size}, notes ${notes.size}, bad $bad, range ${notes.minOfOrNull { it.midi }}..${notes.maxOfOrNull { it.midi }}")
+            }
+        }
+    }
 }

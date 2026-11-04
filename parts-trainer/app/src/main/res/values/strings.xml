@@ -221,4 +221,14 @@
     <string name="accel_not_tuned">не подобрано (подберётся при первом распознавании)</string>
     <string name="accel_hint">Подбор сравнивает способы запуска нейросети на этом телефоне (обычные ядра, XNNPACK, fp16, нейропроцессор через NNAPI) и выбирает самый быстрый из точных. Для полного подбора скачивается ещё ≈ %1$d МБ. Около минуты.</string>
     <string name="accel_tune">Подобрать самый быстрый способ</string>
+    <string name="parts_title">Партии в нотах</string>
+    <string name="parts_hint">Быстрый просмотр страницы (несколько секунд) покажет, какие партии в нотах — в том числе одинаковые (2 сопрано, 3 альта) и два голоса на одной строке. Отметьте нужные: распознаются только они, выбор строки ниже тогда не учитывается.</string>
+    <string name="parts_scanning">Просмотр страницы…</string>
+    <string name="parts_scan">Найти партии (страница %1$d)</string>
+    <string name="parts_rescan">Найти заново (страница %1$d)</string>
+    <string name="parts_where">строка %1$d в системе</string>
+    <string name="parts_upper">, верхний голос (штили вверх)</string>
+    <string name="parts_lower">, нижний голос (штили вниз)</string>
+    <string name="parts_picked">Будут распознаны отмеченные партии: %1$d</string>
+    <string name="parts_none_picked">Партии не отмечены — распознаётся строка по выбору ниже.</string>
 </resources>

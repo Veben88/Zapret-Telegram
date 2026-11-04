@@ -71,7 +71,7 @@ class Staff2Score(
 
 
     /** [canvas] — изображение строки 256×1280 (белый фон). */
-    fun predict(canvas: GrayImage, isCancelled: () -> Boolean = { false }): List<EncodedSymbol> = predictBatch(listOf(canvas), isCancelled)[0]
+    fun predict(canvas: GrayImage, isCancelled: () -> Boolean = { false }, maxSteps: Int = MAX_SEQ_LEN): List<EncodedSymbol> = predictBatch(listOf(canvas), isCancelled, maxSteps)[0]
 
     /** Контекст энкодера [1, N, 512] для одной строки. */
     private fun encode(canvas: GrayImage): Pair<FloatArray, LongArray> {
@@ -90,7 +90,7 @@ class Staff2Score(
     }
 
     /** Чтение строк; батч (>1 строки за прогон) возможен только с декодером, у которого размер батча не зашит в модель. */
-    fun predictBatch(canvases: List<GrayImage>, isCancelled: () -> Boolean = { false }): List<List<EncodedSymbol>> {
+    fun predictBatch(canvases: List<GrayImage>, isCancelled: () -> Boolean = { false }, maxSteps: Int = MAX_SEQ_LEN): List<List<EncodedSymbol>> {
         if (canvases.isEmpty()) return emptyList()
         val encoded = canvases.map { if (isCancelled()) throw InterruptedException("Отменено"); encode(it) }
         val b = canvases.size
@@ -104,14 +104,14 @@ class Staff2Score(
         val redT = OnnxTensor.createTensor(env, FloatBuffer.wrap(reduced), longArrayOf(b.toLong(), 1, dim.toLong()))
         val td = System.nanoTime()
         try {
-            return decode(b, fullT, redT, isCancelled)
+            return decode(b, fullT, redT, isCancelled, maxSteps)
         } finally {
             decoderMs += (System.nanoTime() - td) / 1_000_000
             fullT.close(); redT.close()
         }
     }
 
-    private fun decode(b: Int, ctxFull: OnnxTensor, ctxReduced: OnnxTensor, isCancelled: () -> Boolean): List<List<EncodedSymbol>> {
+    private fun decode(b: Int, ctxFull: OnnxTensor, ctxReduced: OnnxTensor, isCancelled: () -> Boolean, maxSteps: Int): List<List<EncodedSymbol>> {
         val symbols = List(b) { ArrayList<EncodedSymbol>() }
         val done = BooleanArray(b)
         val rhythm = LongArray(b) { 1L }; val pitch = LongArray(b); val lift = LongArray(b); val art = LongArray(b); val slur = LongArray(b)
@@ -121,7 +121,7 @@ class Staff2Score(
         }
         fun longs(v: LongArray) = OnnxTensor.createTensor(env, LongBuffer.wrap(v.copyOf()), longArrayOf(b.toLong(), 1))
         try {
-            for (step in 0 until MAX_SEQ_LEN) {
+            for (step in 0 until minOf(MAX_SEQ_LEN, maxSteps)) {
                 if (isCancelled()) throw InterruptedException("Отменено")
                 val inputs = HashMap<String, OnnxTensor>()
                 val toClose = ArrayList<OnnxTensor>()

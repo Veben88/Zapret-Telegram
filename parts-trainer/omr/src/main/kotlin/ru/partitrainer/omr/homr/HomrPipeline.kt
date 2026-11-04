@@ -202,21 +202,41 @@ class HomrPipeline(
      * Читает нотоносцы (энкодер+декодер) в нескольких потоках: шаг декодера — много мелких операций, одному потоку
      * ядра не загрузить. Сессии ONNX Runtime потокобезопасны. Порядок результатов сохраняется.
      */
+    /**
+     * Быстрый просмотр партий: самая полная система страницы, у каждой строки читается только начало ([maxSteps] символов) —
+     * хватает, чтобы узнать ключ, «8», примерную высоту и есть ли на строке два голоса.
+     */
+    fun scanSystem(gray: GrayImage, accurate: Boolean = false, maxSteps: Int = 80, isCancelled: () -> Boolean = { false }, located: Located? = null): List<StaffRead> {
+        val loc = located ?: locate(gray, accurate, { _, _, _ -> }, isCancelled)
+        val sys = loc.systems.maxByOrNull { it.size } ?: return emptyList()
+        val s2s = Staff2Score(env, encSession, decSession, vocab, if (serialEncoder) encLock else null)
+        val canvases = sys.map { staffCanvas(loc.page, it, loc.staves) }
+        val tokens = predictAll(s2s, canvases, isCancelled, maxSteps)
+        val leftEdge = sys.map { it.minX }.sorted().let { it[it.size / 2] }.toDouble()
+        return sys.mapIndexed { i, st ->
+            val t = tokens[i]
+            val clef = t.firstOrNull { it.rhythm.startsWith("clef_") }?.rhythm?.getOrNull(5)
+            val notes = t.filter { it.rhythm.startsWith("note_") }.mapNotNull { TokenParser.midi(it.pitch, it.lift) }.sorted()
+            val oct = StaffDetector.octaveMarkScore(loc.page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
+            StaffRead(st, loc.systems.indexOf(sys), i, t, clef, oct > OCTAVE_MARK_THRESHOLD && clef != 'F', notes.getOrNull(notes.size / 2), oct)
+        }
+    }
+
     private fun predictAll(
-        s2s: Staff2Score, canvases: List<GrayImage>, isCancelled: () -> Boolean, onDone: (Int) -> Unit,
+        s2s: Staff2Score, canvases: List<GrayImage>, isCancelled: () -> Boolean, maxSteps: Int = Staff2Score.MAX_SEQ_LEN, onDone: (Int) -> Unit = {},
     ): List<List<EncodedSymbol>> {
         if (canvases.isEmpty()) return emptyList()
         val workers = staffWorkers.coerceIn(1, canvases.size)
         val done = java.util.concurrent.atomic.AtomicInteger(0)
         if (workers == 1) return canvases.map { c ->
             if (isCancelled()) throw InterruptedException("Отменено")
-            s2s.predict(c, isCancelled).also { onDone(done.incrementAndGet()) }
+            s2s.predict(c, isCancelled, maxSteps).also { onDone(done.incrementAndGet()) }
         }
         val pool = java.util.concurrent.Executors.newFixedThreadPool(workers) { r -> Thread(r, "homr-staff").also { it.isDaemon = true } }
         try {
             val futures = canvases.map { c -> pool.submit<List<EncodedSymbol>> {
                 if (isCancelled()) throw InterruptedException("Отменено")
-                s2s.predict(c, isCancelled).also { onDone(done.incrementAndGet()) }
+                s2s.predict(c, isCancelled, maxSteps).also { onDone(done.incrementAndGet()) }
             } }
             return futures.map {
                 try { it.get() } catch (e: java.util.concurrent.ExecutionException) { throw (e.cause ?: e) }

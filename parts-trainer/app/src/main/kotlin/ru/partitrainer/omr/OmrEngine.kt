@@ -39,7 +39,9 @@ fun interface PageProvider { suspend fun render(page: Int): Bitmap }
  */
 class OmrRequest(val pages: List<Int>, val staff: StaffSelection, val provider: PageProvider, val twoStaffChoir: Boolean = false, val accurate: Boolean = false,
     /** Распознавать слова песни под нотами (только движок «На устройстве»). */
-    val lyrics: Boolean = false)
+    val lyrics: Boolean = false,
+    /** Партия, найденная предварительным просмотром (вместо [staff]); только движок «На устройстве». */
+    val part: ru.partitrainer.omr.homr.PartPick? = null)
 
 data class OmrProgress(val done: Int, val total: Int, val message: String)
 

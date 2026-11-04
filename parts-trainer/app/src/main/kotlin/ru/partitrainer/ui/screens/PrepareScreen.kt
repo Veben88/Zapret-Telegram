@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -60,6 +61,28 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
     val settings = MutableStateFlow(Settings())
     val hasKey = MutableStateFlow(false)
     val error = MutableStateFlow<String?>(null)
+    /** Партии, найденные предварительным просмотром, и отмеченные для распознавания. */
+    val parts = MutableStateFlow<List<ru.partitrainer.omr.homr.PartPick>>(emptyList())
+    val pickedParts = MutableStateFlow<Set<Int>>(emptySet())
+    val scanning = MutableStateFlow(false)
+
+    /** Быстрый просмотр первой выбранной страницы: какие партии в нотах (несколько секунд). */
+    fun scanParts() = viewModelScope.launch {
+        val page = selected.value.minOrNull() ?: 0
+        scanning.value = true; error.value = null
+        try {
+            val engine = HomrOnDeviceEngine(c.homrModels)
+            val found = engine.scanParts({ p -> renderer.renderForOmr(p, rotations.value[p] ?: 0) }, page, settings.value.omrAccurate)
+            parts.value = found
+            pickedParts.value = found.indices.filter { !found[it].piano }.toSet()
+            if (found.isEmpty()) error.value = "Нотоносцы на странице не найдены"
+        } catch (e: OmrException) { error.value = e.userMessage }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { error.value = "Не удалось просмотреть страницу: ${e.message}" }
+        finally { scanning.value = false }
+    }
+
+    fun togglePart(i: Int) { pickedParts.value = if (i in pickedParts.value) pickedParts.value - i else pickedParts.value + i }
 
     init {
         viewModelScope.launch {
@@ -116,7 +139,8 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
         (engine.availability() as? Availability.Unavailable)?.let { error.value = it.reason; return null }
         val pages = selected.value.sorted()
         if (pages.isEmpty()) { error.value = "Выберите хотя бы одну страницу"; return null }
-        val job = OmrJob(path, hash, isPdf, name, pages, pages.map { rotations.value[it] ?: 0 }, staff.value, s.engine, twoStaff.value, s.omrAccurate, s.omrLyrics)
+        val partList = if (s.engine == EngineId.ON_DEVICE) pickedParts.value.sorted().mapNotNull { parts.value.getOrNull(it)?.encode() } else emptyList()
+        val job = OmrJob(path, hash, isPdf, name, pages, pages.map { rotations.value[it] ?: 0 }, staff.value, s.engine, twoStaff.value, s.omrAccurate, s.omrLyrics, partList)
         return OmrJob.enqueue(c.context, job).toString()
     }
 
@@ -149,6 +173,9 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
     val hasKey by vm.hasKey.collectAsState()
     val error by vm.error.collectAsState()
     val models by vm.models.state.collectAsState()
+    val parts by vm.parts.collectAsState()
+    val picked by vm.pickedParts.collectAsState()
+    val scanning by vm.scanning.collectAsState()
     val scope = rememberCoroutineScope()
     var warn by remember { mutableStateOf(false) }
 
@@ -170,6 +197,35 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
     }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(name, style = MaterialTheme.typography.titleMedium)
+
+            // Предварительный просмотр партий (движок на устройстве)
+            if (settings.engine == EngineId.ON_DEVICE && models is ru.partitrainer.omr.ModelState.Ready) {
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(stringResource(R.string.parts_title), style = MaterialTheme.typography.titleSmall)
+                        Text(stringResource(R.string.parts_hint), style = MaterialTheme.typography.bodySmall)
+                        if (scanning) {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Text(stringResource(R.string.parts_scanning), style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            OutlinedButton(onClick = vm::scanParts, Modifier.heightIn(min = 48.dp)) {
+                                Text(stringResource(if (parts.isEmpty()) R.string.parts_scan else R.string.parts_rescan, (selected.minOrNull() ?: 0) + 1))
+                            }
+                        }
+                        for ((i, p) in parts.withIndex()) {
+                            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(i in picked, role = Role.Checkbox, onValueChange = { vm.togglePart(i) }), verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(i in picked, onCheckedChange = null); Spacer(Modifier.width(12.dp))
+                                Column {
+                                    Text(p.name)
+                                    val where = stringResource(R.string.parts_where, p.staffIndex + 1) + when (p.stemVoice) { 1 -> stringResource(R.string.parts_upper); 2 -> stringResource(R.string.parts_lower); else -> "" }
+                                    Text(where, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        if (parts.isNotEmpty()) Text(stringResource(if (picked.isEmpty()) R.string.parts_none_picked else R.string.parts_picked, picked.size), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
 
             Text(stringResource(R.string.which_staff), style = MaterialTheme.typography.titleSmall)
             Column(Modifier.selectableGroup()) {

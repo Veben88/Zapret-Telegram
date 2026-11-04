@@ -49,7 +49,7 @@ class HomrOnDeviceEngine(
             runCatching { models.tune(full = false, threads = encoderThreads()) }
         }
         val files = models.files() ?: throw OmrException("Модели не скачаны", offerManual = false)
-        if (request.staff.isChoirVoice) return recognizeChoir(files, request, onProgress)
+        if (request.staff.isChoirVoice || request.part != null) return recognizeChoir(files, request, onProgress)
         val sel = when (request.staff) {
             StaffSelection.RIGHT_HAND -> StaffDetector.Staff.RIGHT_HAND
             StaffSelection.LEFT_HAND -> StaffDetector.Staff.LEFT_HAND
@@ -136,7 +136,10 @@ class HomrOnDeviceEngine(
                             pipeline!!.recognizeAll(gray, accurate = request.accurate, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive }, located = loc)
                                 .also { choirPages[page] = it }
                         }
-                        if (request.twoStaffChoir) {
+                        if (request.part != null) {
+                            val (t, s) = ru.partitrainer.omr.homr.Parts.tokensFor(request.part, systems)
+                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; syls += t.map { it.lyricSyls }; cols += t.map { it.columns }; slots += t.map { i }; if (s != 0) shift = s
+                        } else if (request.twoStaffChoir) {
                             val t = ChoirAssigner.tokensWithLyricsTwoStaff(voice, systems)
                             tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; syls += t.map { it.lyricSyls }; cols += t.map { it.columns }; slots += t.map { i }
                         } else {
@@ -182,6 +185,25 @@ class HomrOnDeviceEngine(
 
     /** Потоков на один прогон энкодера: при параллельном чтении строк — 1, иначе 2. */
     private fun encoderThreads(): Int = if (models.bigMemoryDevice) 1 else 2.coerceAtMost(CpuTopology.performanceThreads())
+
+    /**
+     * Предварительный просмотр: какие партии есть на странице (самая полная система, у строк читается только начало).
+     * Занимает несколько секунд — гораздо меньше полного распознавания.
+     */
+    suspend fun scanParts(provider: PageProvider, page: Int, accurate: Boolean): List<ru.partitrainer.omr.homr.PartPick> = withContext(Dispatchers.Default) {
+        val files = models.files() ?: throw OmrException("Модели не скачаны", offerManual = false)
+        try {
+            newPipeline(files, null).use { p ->
+                val bmp = provider.render(page)
+                val gray = try { toGray(bmp) } finally { bmp.recycle() }
+                ru.partitrainer.omr.homr.Parts.describe(p.scanSystem(gray, accurate))
+            }
+        } catch (e: ru.partitrainer.omr.homr.SegnetMissingException) {
+            throw OmrException("Модель сегментации повреждена или удалена. Скачайте модели заново в настройках.", offerManual = false)
+        } catch (e: OutOfMemoryError) {
+            throw OmrException("Не хватило памяти для просмотра страницы.", offerManual = false)
+        }
+    }
 
     /** Рендер страницы и поиск нотоносцев (то, что можно делать параллельно с чтением предыдущей страницы). */
     private suspend fun prepare(pipeline: HomrPipeline, request: OmrRequest, page: Int, ctx: kotlin.coroutines.CoroutineContext): Pair<GrayImage, HomrPipeline.Located> {
