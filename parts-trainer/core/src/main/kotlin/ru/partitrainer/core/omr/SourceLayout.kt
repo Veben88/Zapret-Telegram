@@ -12,6 +12,13 @@ data class MeasureRect(val page: Int, val x0: Float, val y0: Float, val x1: Floa
     fun contains(x: Float, y: Float) = x in x0..x1 && y in y0..y1
 }
 
-/** Где на страницах исходника находится каждый такт распознанной партии (по порядку тактов; null — неизвестно). */
+/** Нота на странице исходника: номер в [SourceLayout.pages] и центр головки в долях страницы. */
 @Serializable
-data class SourceLayout(val pages: List<PageRef>, val rects: List<MeasureRect?>)
+data class NoteMark(val page: Int, val x: Float, val y: Float)
+
+/**
+ * Где на страницах исходника находится каждый такт распознанной партии (по порядку тактов; null — неизвестно)
+ * и каждая нота каждого голоса ([notes]: id голоса → ноты по порядку, как в партии).
+ */
+@Serializable
+data class SourceLayout(val pages: List<PageRef>, val rects: List<MeasureRect?>, val notes: Map<String, List<NoteMark?>> = emptyMap())

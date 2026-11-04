@@ -32,7 +32,7 @@ object TokenParser {
         return (base + alter).coerceIn(0, 127)
     }
 
-    private class Ev(val midi: Int?, val beats: Double, var tie: Boolean, val slur: String, var syl: String? = null)
+    private class Ev(val midi: Int?, val beats: Double, var tie: Boolean, val slur: String, var syl: String? = null, val x: Double = Double.NaN, val y: Double = Double.NaN, val staff: Int = -1)
 
     private class Builder {
         val events = ArrayList<Ev>()
@@ -120,7 +120,7 @@ object TokenParser {
                         val best = g.filter { it.rhythm.startsWith("note_") && beats(it.rhythm) != null }
                             .mapNotNull { n -> midi(n.pitch, n.lift)?.let { it to n } }
                             .maxByOrNull { it.first } ?: continue
-                        val ev = Ev(((best.first + transpose).coerceIn(0, 127)), b, false, best.second.slur)
+                        val ev = Ev(((best.first + transpose).coerceIn(0, 127)), b, false, best.second.slur, x = best.second.x, y = best.second.y, staff = staffIdx)
                         // лига: slurStart на предыдущей ноте и slurStop на этой с той же высотой
                         val p = prevEvent
                         val continuation = p != null && p.midi == ev.midi && p.slur.contains("slurStart") && ev.slur.contains("slurStop")
@@ -174,7 +174,7 @@ object TokenParser {
             OmrMeasure(
                 n = i + 1, chord = null,
                 pickup = i == 0 && b.events.none { it.beats == FILL } && b.total() < mt.len - 0.02 && measures.size > 1,
-                events = b.events.map { OmrEvent(it.midi, if (it.beats == FILL) mt.len else it.beats, it.tie, it.syl) },
+                events = b.events.map { OmrEvent(it.midi, if (it.beats == FILL) mt.len else it.beats, it.tie, it.syl, it.x, it.y, it.staff) },
                 repeatStart = b.repeatStart, repeatEnd = b.repeatEnd, ending = b.ending, marks = emptyList(),
                 timeNum = mt.num, timeDen = mt.den,
             )

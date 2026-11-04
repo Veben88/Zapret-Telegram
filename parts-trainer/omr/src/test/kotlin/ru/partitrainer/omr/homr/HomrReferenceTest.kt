@@ -795,4 +795,30 @@ class HomrReferenceTest {
         }
         println("TRIP TOTAL bad $before -> $after, voices changed $changed")
     }
+
+    /** Положения нот по вниманию декодера: HOMR_ATT=dir:page — картинка *_att.png с точками нот. */
+    @Test fun attentionPositions() {
+        val spec = System.getenv("HOMR_ATT")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val (dir, name) = spec!!.split(':')
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            val gray = loadGray(File(dir, "$name.png"))
+            val loc = pl.locate(gray, false, { _, _, _ -> }, { false })
+            val reads = pl.recognizeAll(gray, located = loc)
+            val img = java.awt.image.BufferedImage(loc.page.width, loc.page.height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+            for (y in 0 until loc.page.height) for (x in 0 until loc.page.width) { val v = loc.page[x, y]; img.setRGB(x, y, (v shl 16) or (v shl 8) or v) }
+            val g = img.createGraphics()
+            var n = 0; var inside = 0
+            for (r in reads.flatten()) for (s in r.tokens) if (s.rhythm.startsWith("note_") && !s.x.isNaN()) {
+                n++
+                if (s.x in r.staff.minX - 30.0..r.staff.maxX + 30.0 && s.y in r.staff.minY - 6 * r.staff.unit..r.staff.maxY + 6 * r.staff.unit) inside++
+                g.color = if (s.position.endsWith("2")) java.awt.Color(0, 90, 255) else java.awt.Color(230, 0, 0)
+                g.fillOval(s.x.toInt() - 5, s.y.toInt() - 5, 10, 10)
+            }
+            g.dispose()
+            ImageIO.write(img, "png", File(dir, "${name}_att.png"))
+            println("ATT notes $n, inside their staff $inside")
+        }
+    }
 }

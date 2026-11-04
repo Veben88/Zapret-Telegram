@@ -58,6 +58,7 @@ class HomrOnDeviceEngine(
         val ctx = currentCoroutineContext()
         val tokens = ArrayList<List<EncodedSymbol>>()
         val lines = ArrayList<List<String>>()
+        val syls = ArrayList<List<List<ru.partitrainer.omr.homr.Syl>>>()
         val cols = ArrayList<SysColumns?>()
         val slots = ArrayList<Int>()
         val text = if (request.lyrics) textFactory?.invoke() else null
@@ -79,6 +80,7 @@ class HomrOnDeviceEngine(
                         )
                         tokens += r.staffs
                         lines += r.staffs.indices.map { r.lyrics.getOrNull(it).orEmpty() }
+                        syls += r.staffs.indices.map { r.lyricSyls.getOrNull(it).orEmpty() }
                         cols += r.staffs.indices.map { r.columns.getOrNull(it) }
                         slots += r.staffs.map { i }
                         onProgress(OmrProgress(i + 1, request.pages.size, "Страница ${page + 1} готова"))
@@ -97,8 +99,9 @@ class HomrOnDeviceEngine(
         if (tokens.isEmpty() || tokens.all { it.isEmpty() }) {
             throw OmrException("Нотоносцы на страницах не найдены. Проверьте, что страница ровная и чёткая, или введите ноты вручную.", offerManual = true)
         }
-        return TokenParser.parse(tokens, syllables = if (text != null) Lyrics.forStaffs(tokens, lines) else emptyList())
-            .copy(layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) }))
+        val parsed = TokenParser.parse(tokens, syllables = if (text != null) Lyrics.forStaffs(tokens, lines, syls) else emptyList())
+        val layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) })
+        return parsed.copy(layout = layout.copy(notes = mapOf("" to LayoutBuilder.notes(parsed, cols, slots))))
     }
 
     private suspend fun recognizeChoir(files: ru.partitrainer.omr.homr.HomrModelFiles, request: OmrRequest, onProgress: (OmrProgress) -> Unit): OmrParsed {
@@ -109,6 +112,7 @@ class HomrOnDeviceEngine(
         val ctx = currentCoroutineContext()
         val tokens = ArrayList<List<EncodedSymbol>>()
         val lines = ArrayList<List<String>>()
+        val syls = ArrayList<List<List<ru.partitrainer.omr.homr.Syl>>>()
         val cols = ArrayList<SysColumns?>()
         val slots = ArrayList<Int>()
         val text = if (request.lyrics) textFactory?.invoke() else null
@@ -134,10 +138,10 @@ class HomrOnDeviceEngine(
                         }
                         if (request.twoStaffChoir) {
                             val t = ChoirAssigner.tokensWithLyricsTwoStaff(voice, systems)
-                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; cols += t.map { it.columns }; slots += t.map { i }
+                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; syls += t.map { it.lyricSyls }; cols += t.map { it.columns }; slots += t.map { i }
                         } else {
                             val (t, s) = ChoirAssigner.tokensWithLyrics(voice, systems)
-                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; cols += t.map { it.columns }; slots += t.map { i }; if (s != 0) shift = s
+                            tokens += t.map { it.tokens }; lines += t.map { it.lyricLines }; syls += t.map { it.lyricSyls }; cols += t.map { it.columns }; slots += t.map { i }; if (s != 0) shift = s
                         }
                         onProgress(OmrProgress(i + 1, request.pages.size, "Страница ${page + 1} готова"))
                     }
@@ -155,8 +159,9 @@ class HomrOnDeviceEngine(
         if (tokens.isEmpty() || tokens.all { it.isEmpty() }) {
             throw OmrException("Нотоносцы на страницах не найдены. Проверьте, что страница ровная и чёткая, или введите ноты вручную.", offerManual = true)
         }
-        return TokenParser.parse(tokens, shift, if (text != null) Lyrics.forStaffs(tokens, lines) else emptyList())
-            .copy(layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) }))
+        val parsed = TokenParser.parse(tokens, shift, if (text != null) Lyrics.forStaffs(tokens, lines, syls) else emptyList())
+        val layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) })
+        return parsed.copy(layout = layout.copy(notes = mapOf("" to LayoutBuilder.notes(parsed, cols, slots))))
     }
 
     /**

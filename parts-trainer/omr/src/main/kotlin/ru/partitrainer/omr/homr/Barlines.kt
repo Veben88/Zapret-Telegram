@@ -135,6 +135,35 @@ object LayoutBuilder {
     }
 
     /**
+     * Ноты партии на страницах — по порядку нот партии (ноты, которые начинают звук: продолжения лиг пропускаются,
+     * как при сборке партии). [parsed] — результат разбора этих же [tokens].
+     */
+    fun notes(parsed: ru.partitrainer.core.omr.OmrParsed, columns: List<SysColumns?>, slots: List<Int>): List<ru.partitrainer.core.omr.NoteMark?> {
+        val out = ArrayList<ru.partitrainer.core.omr.NoteMark?>()
+        var prevTied = false
+        for (e in parsed.measures.flatMap { it.events }) {
+            if (e.midi == null) { prevTied = false; continue }
+            if (!prevTied) {
+                val cols = columns.getOrNull(e.staff)
+                out += if (cols == null || e.x.isNaN() || e.y.isNaN()) null else {
+                    val (sx, sy) = toSourcePoint(cols.frame, e.x, e.y)
+                    ru.partitrainer.core.omr.NoteMark(slots.getOrElse(e.staff) { 0 }, (sx / cols.frame.width).toFloat().coerceIn(0f, 1f), (sy / cols.frame.height).toFloat().coerceIn(0f, 1f))
+                }
+            }
+            prevTied = e.tie
+        }
+        return out
+    }
+
+    /** Точка выровненной страницы → исходная страница (обратный поворот вокруг центра, как в ImageOps.rotate). */
+    private fun toSourcePoint(f: PageFrame, px: Double, py: Double): Pair<Double, Double> {
+        val cx = (f.width - 1) / 2.0; val cy = (f.height - 1) / 2.0
+        val cs = Math.cos(f.angle); val sn = Math.sin(f.angle)
+        val dx = px - cx; val dy = py - cy
+        return (cx + dx * cs - dy * sn) to (cy + dx * sn + dy * cs)
+    }
+
+    /**
      * @param measureCount сколько тактов в этой системе по распознанным нотам. Если найденных черт столько же — берём их,
      * иначе делим стан поровну (индексы тактов не должны смещаться).
      */

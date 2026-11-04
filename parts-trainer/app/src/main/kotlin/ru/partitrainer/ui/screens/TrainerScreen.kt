@@ -133,6 +133,8 @@ fun TrainerScreen(projectId: Long, onBack: () -> Unit, onEdit: () -> Unit, onSet
                     project.sourcePath, project.sourceType == "PDF", layout, curMeasure,
                     onSeekMeasure = { i -> measureStarts.getOrNull(i)?.let { st -> vm.playFrom(d.playMap.expandedBeat(st), false) } },
                     modifier = Modifier.weight(1f).fillMaxWidth(), caretColor = caretColor,
+                    notes = d.voice?.id?.let { layout.notes[it] }, noteStarts = spec?.notes?.map { it.startBeat }.orEmpty(),
+                    beat = { d.playMap.originalBeat(beatState.value) },
                 )
             } else if (spec != null) {
                 ScoreView(spec, { beatState.value }, curMeasure, d.playMap, showCaret = active, onSeek = { ob -> vm.playFrom(d.playMap.expandedBeat(ob), false) }, modifier = Modifier.weight(1f).fillMaxWidth(), caretColor = caretColor)

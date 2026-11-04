@@ -40,6 +40,11 @@ import java.io.File
 @Composable
 fun OriginalView(
     path: String, isPdf: Boolean, layout: SourceLayout, curMeasure: Int, onSeekMeasure: (Int) -> Unit, modifier: Modifier = Modifier,
+    /** Ноты выбранного голоса на страницах (по порядку партии) и их начала в долях; если есть — указатель идёт по нотам. */
+    notes: List<ru.partitrainer.core.omr.NoteMark?>? = null,
+    noteStarts: List<Double> = emptyList(),
+    /** Текущая доля в напечатанных нотах (читается при рисовании — указатель движется без перекомпоновки). */
+    beat: () -> Double = { 0.0 },
     caretColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
 ) {
     val renderer = remember(path) { PageRenderer(File(path), isPdf) }
@@ -74,8 +79,27 @@ fun OriginalView(
                         if (r != null && r.page == slot) {
                             val tl = Offset(r.x0 * size.width, r.y0 * size.height)
                             val sz = Size((r.x1 - r.x0) * size.width, (r.y1 - r.y0) * size.height)
-                            drawRoundRect(accent.copy(alpha = 0.22f), tl, sz, CornerRadius(8f))
-                            drawRoundRect(accent, tl, sz, CornerRadius(8f), style = Stroke(3f))
+                            drawRoundRect(accent.copy(alpha = 0.14f), tl, sz, CornerRadius(8f))
+                            drawRoundRect(accent.copy(alpha = 0.6f), tl, sz, CornerRadius(8f), style = Stroke(2f))
+                        }
+                        // указатель по нотам: от текущей ноты плавно к следующей (если она на той же строке)
+                        if (curMeasure >= 0 && notes != null && notes.size == noteStarts.size && notes.isNotEmpty()) {
+                            val b = beat()
+                            var i = noteStarts.indexOfLast { it <= b + 1e-9 }
+                            if (i < 0) i = 0
+                            val cur = notes[i]
+                            if (cur != null && cur.page == slot) {
+                                var x = cur.x
+                                val nx = notes.getOrNull(i + 1)
+                                val t0 = noteStarts[i]; val t1 = noteStarts.getOrNull(i + 1)
+                                if (nx != null && t1 != null && t1 > t0 && nx.page == slot && Math.abs(nx.y - cur.y) < 0.03f && nx.x > cur.x) {
+                                    x = cur.x + (nx.x - cur.x) * ((b - t0) / (t1 - t0)).toFloat().coerceIn(0f, 1f)
+                                }
+                                val top = (if (r != null && r.page == slot) r.y0 else cur.y - 0.03f) * size.height
+                                val bottom = (if (r != null && r.page == slot) r.y1 else cur.y + 0.03f) * size.height
+                                drawLine(accent, Offset(x * size.width, top), Offset(x * size.width, bottom), 4f)
+                                drawCircle(accent, 7f, Offset(cur.x * size.width, cur.y * size.height), style = Stroke(3f))
+                            }
                         }
                     }
                 }

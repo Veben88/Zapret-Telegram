@@ -123,8 +123,10 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
                     val asm = ClaudeOmr.assemble(parsed, staff.voiceLabel)
                     if (base == null) {
                         base = asm
-                        layout = parsed.layout?.let { l -> l.copy(pages = l.pages.map { p -> p.copy(rotation = rotByPage[p.index] ?: 0) }) }
+                        layout = parsed.layout?.let { l -> l.copy(pages = l.pages.map { p -> p.copy(rotation = rotByPage[p.index] ?: 0) }, notes = emptyMap()) }
                     }
+                    // положения нот — для каждого голоса свои
+                    parsed.layout?.notes?.get("")?.let { n -> layout = layout?.let { l -> l.copy(notes = l.notes + ("omr_${staff.key}" to n)) } }
                     voices += asm.score.voices.single().copy(id = "omr_${staff.key}", kind = staff.kind)
                 }
             } catch (e: OmrException) {

@@ -16,6 +16,15 @@ data class EncodedSymbol(
     val articulation: String, val slur: String, val position: String,
 ) {
     override fun toString() = "$rhythm $pitch $lift $articulation $slur $position"
+
+    /**
+     * Где символ на странице (пиксели выровненной страницы 1920 px): центр внимания декодера, перенесённый с холста строки
+     * обратно на страницу. Не участвует в сравнении символов. NaN — неизвестно.
+     */
+    var x: Double = Double.NaN
+    var y: Double = Double.NaN
+
+    fun withPositionOf(o: EncodedSymbol): EncodedSymbol = also { x = o.x; y = o.y }
 }
 
 class HomrVocab private constructor(
@@ -58,7 +67,7 @@ class Staff2Score(
 
     private val cacheIn = (0 until DEPTH * 4).map { "cache_in$it" }
     private val cacheOut = (0 until DEPTH * 4).map { "cache_out$it" }
-    private val outNames = listOf("out_rhythms", "out_pitchs", "out_lifts", "out_positions", "out_articulations", "out_slurs") + cacheOut
+    private val outNames = listOf("out_rhythms", "out_pitchs", "out_lifts", "out_positions", "out_articulations", "out_slurs", "attention") + cacheOut
 
 
     /** [canvas] — изображение строки 256×1280 (белый фон). */
@@ -144,7 +153,12 @@ class Staff2Score(
                     val p = argmaxLast(1, row); val l = argmaxLast(2, row)
                     val pos = argmaxLast(3, row); val a = argmaxLast(4, row); val s = argmaxLast(5, row)
                     steps++
-                    symbols[row] += EncodedSymbol(vocab.rhythm[r], vocab.pitch[p], vocab.lift[l], vocab.articulation[a], vocab.slur[s], vocab.position[pos])
+                    val sym = EncodedSymbol(vocab.rhythm[r], vocab.pitch[p], vocab.lift[l], vocab.articulation[a], vocab.slur[s], vocab.position[pos])
+                    // центр внимания на холсте строки (x, y) — где декодер «смотрел», когда выдал этот символ
+                    (result.get("attention").orElse(null) as? OnnxTensor)?.floatBuffer?.let { fb ->
+                        if (fb.remaining() >= 2 * (row + 1)) { sym.x = fb.get(2 * row).toDouble(); sym.y = fb.get(2 * row + 1).toDouble() }
+                    }
+                    symbols[row] += sym
                     rhythm[row] = r.toLong(); pitch[row] = p.toLong(); lift[row] = l.toLong(); art[row] = a.toLong(); slur[row] = s.toLong()
                 }
                 if (done.all { it }) break

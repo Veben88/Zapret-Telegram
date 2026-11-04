@@ -27,6 +27,8 @@ class PageTokens(
     val lyrics: List<List<String>> = emptyList(),
     /** Колонки тактов системы каждого выбранного нотоносца (для показа страницы исходника с указателем). */
     val columns: List<SysColumns?> = emptyList(),
+    /** Слоги текста с положением на странице (по строкам текста) для каждого выбранного нотоносца; пусто — без положений. */
+    val lyricSyls: List<List<List<Syl>>> = emptyList(),
 )
 
 /**
@@ -132,16 +134,18 @@ class HomrPipeline(
         val s2s = Staff2Score(env, encSession, decSession, vocab, if (serialEncoder) encLock else null)
         val canvases = chosen.map { st -> staffCanvas(page, st, staves) }
         val result = predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, chosen.size, "Чтение нотоносца $done из ${chosen.size}") }
-        val lyrics = text?.let { rec ->
+        result.forEachIndexed { i, t -> mapToPage(t, chosen[i], staves) }
+        val read = text?.let { rec ->
             onProgress(chosen.size, chosen.size, "Распознавание текста")
-            chosen.map { st -> if (isCancelled()) throw InterruptedException("Отменено"); Lyrics.readLines(rec, page, st, nextStaffOf(st, staves)) }
+            chosen.map { st -> if (isCancelled()) throw InterruptedException("Отменено"); Lyrics.read(rec, page, st, nextStaffOf(st, staves)) }
         } ?: emptyList()
+        val lyrics = read.map { it.first }
         onProgress(chosen.size, chosen.size, "Страница готова")
         val columns = chosen.map { st ->
             val sys = systems.firstOrNull { st in it } ?: listOf(st)
             Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(result[chosen.indexOf(st)])).measures.size)
         }
-        return PageTokens(staves.size, result, staves, chosen, lyrics, columns)
+        return PageTokens(staves.size, result, staves, chosen, lyrics, columns, read.map { it.second })
     }
 
     /**
@@ -168,6 +172,7 @@ class HomrPipeline(
         val allTokens = timed("transformer") {
             predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, total, "Чтение нотоносца $done из $total") }
         }
+        allTokens.forEachIndexed { i, t -> mapToPage(t, jobs[i].third, staves) }
         val out = ArrayList<List<StaffRead>>()
         for ((si, sys) in systems.withIndex()) {
             val reads = ArrayList<StaffRead>()
@@ -179,8 +184,9 @@ class HomrPipeline(
                 val leftEdge = sys.map { it.minX }.sorted().let { it[it.size / 2] }.toDouble()
                 val octScore = StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
                 val oct = octScore > OCTAVE_MARK_THRESHOLD
-                val lines = text?.let { rec -> Lyrics.readLines(rec, page, st, nextStaffOf(st, staves)) } ?: emptyList()
-                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore, lines, Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(tokens)).measures.size))
+                val txt = text?.let { rec -> Lyrics.read(rec, page, st, nextStaffOf(st, staves)) }
+                reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore, txt?.first.orEmpty(),
+                    Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(tokens)).measures.size), txt?.second.orEmpty())
             }
             out += reads
         }
@@ -234,6 +240,32 @@ class HomrPipeline(
         fun defaultWorkers(): Int = 1
 
         /** Изображение строки для трансформера: 256×1280, белый фон, область по правилам homr (prepare_staff_image). */
+        /** Перенос точки с холста строки (1280×256) обратно на страницу — обратная к [staffCanvas] разметка. */
+        fun canvasToPage(staff: DetectedStaff, all: List<DetectedStaff>, vPad: Double = 4.0, hPad: Double = 2.0): (Double, Double) -> Pair<Double, Double> {
+            val u = staff.unit
+            val xMin = staff.minX - hPad * u; val xMax = staff.maxX + hPad * u
+            val xm = (staff.minX + staff.maxX) / 2.0
+            val topMid = staff.topAt(xm); val botMid = staff.bottomAt(xm)
+            val above = all.filter { it.maxY < staff.minY + 1 && it !== staff && (it.minY + it.maxY) < (staff.minY + staff.maxY) }.maxOfOrNull { it.bottomAt(xm) }
+            val below = all.filter { it !== staff && (it.minY + it.maxY) > (staff.minY + staff.maxY) }.minOfOrNull { it.topAt(xm) }
+            val relMin = max(-vPad * u, (above ?: -1e9) - topMid)
+            val relMax = min((botMid - topMid) + vPad * u, (below ?: 1e12) - topMid)
+            val regionH = relMax - relMin; val regionW = xMax - xMin
+            val (cw, ch) = canvasSize(regionH.toInt().coerceAtLeast(1), regionW.toInt().coerceAtLeast(1))
+            val yOff = (Staff2Score.HEIGHT - ch) / 2
+            return { cx, cy ->
+                val sx = xMin + cx * regionW / cw
+                val rel = relMin + (cy - yOff) * regionH / ch
+                sx to ((staff.top?.at(sx) ?: topMid) + rel)
+            }
+        }
+
+        /** Центры символов строки — с холста на страницу. */
+        fun mapToPage(symbols: List<EncodedSymbol>, staff: DetectedStaff, all: List<DetectedStaff>) {
+            val f = canvasToPage(staff, all)
+            for (s in symbols) if (!s.x.isNaN() && !s.y.isNaN()) { val (px, py) = f(s.x, s.y); s.x = px; s.y = py }
+        }
+
         fun staffCanvas(page: GrayImage, staff: DetectedStaff, all: List<DetectedStaff>, vPad: Double = 4.0, hPad: Double = 2.0): GrayImage {
             val u = staff.unit
             val xMin = staff.minX - hPad * u; val xMax = staff.maxX + hPad * u

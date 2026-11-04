@@ -43,7 +43,7 @@ object Triplets {
 
     private fun asTriplet(s: EncodedSymbol): EncodedSymbol {
         val m = PLAIN.find(s.rhythm) ?: return s
-        return s.copy(rhythm = "${m.groupValues[1]}_${m.groupValues[2].toInt() * 3 / 2}")
+        return s.copy(rhythm = "${m.groupValues[1]}_${m.groupValues[2].toInt() * 3 / 2}").withPositionOf(s)
     }
 
     /** Нота такта: голос, длительность, индекс символа. */

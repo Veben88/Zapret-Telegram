@@ -18,7 +18,11 @@ import ru.partitrainer.core.structure.Jump
 import ru.partitrainer.core.structure.MeasureMark
 
 /** Один такт в ответе модели (после разбора). */
-data class OmrEvent(val midi: Int?, val beats: Double, val tie: Boolean, val syllable: String?)
+data class OmrEvent(
+    val midi: Int?, val beats: Double, val tie: Boolean, val syllable: String?,
+    /** Где нота на странице (пиксели выровненной страницы) и номер строки во входных данных разбора; NaN/−1 — неизвестно. */
+    val x: Double = Double.NaN, val y: Double = Double.NaN, val staff: Int = -1,
+)
 
 data class OmrMeasure(
     val n: Int,

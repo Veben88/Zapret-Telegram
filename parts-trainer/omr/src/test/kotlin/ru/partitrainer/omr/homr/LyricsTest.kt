@@ -95,3 +95,18 @@ class LyricsStaffsTest {
         assertEquals(listOf("Ра", "дуй", "ся", "Бо", null, null), notes.map { it.lyric })
     }
 }
+
+class LyricsAlignByXTest {
+    @Test fun syllablesLandUnderTheirNotes() {
+        // ноты через 50 px; на третьей ноте распевка (слога нет), лишний слог в конце далеко от нот
+        val notes = listOf(100.0, 150.0, 200.0, 250.0, 300.0)
+        val syls = listOf(Syl("Ра", 98.0), Syl("дуй", 152.0), Syl("ся", 247.0), Syl("Бо", 303.0), Syl("ли", 600.0))
+        assertEquals(listOf("Ра", "дуй", null, "ся", "Бо"), Lyrics.alignByX(syls, notes))
+    }
+
+    @Test fun orderIsKeptEvenIfPositionsAreRough() {
+        val notes = listOf(100.0, 140.0, 180.0)
+        val syls = listOf(Syl("а", 125.0), Syl("б", 128.0), Syl("в", 182.0))
+        assertEquals(listOf("а", "б", "в"), Lyrics.alignByX(syls, notes))
+    }
+}
