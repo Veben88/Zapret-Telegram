@@ -43,6 +43,11 @@ class HomrOnDeviceEngine(
     private val choirPages = HashMap<Int, List<List<StaffRead>>>()
 
     override suspend fun recognize(request: OmrRequest, onProgress: (OmrProgress) -> Unit): OmrParsed {
+        // Первый запуск: быстро сравниваем int8 на обычных ядрах и с XNNPACK (без загрузок, пара секунд)
+        if (models.files() != null && models.encoderBackend == null) {
+            onProgress(OmrProgress(0, request.pages.size, "Подбор ускорителя для этого телефона…"))
+            runCatching { models.tune(full = false, threads = encoderThreads()) }
+        }
         val files = models.files() ?: throw OmrException("Модели не скачаны", offerManual = false)
         if (request.staff.isChoirVoice) return recognizeChoir(files, request, onProgress)
         val sel = when (request.staff) {
@@ -161,12 +166,17 @@ class HomrOnDeviceEngine(
      */
     private fun newPipeline(files: ru.partitrainer.omr.homr.HomrModelFiles, text: TextRecognizer?): HomrPipeline {
         val perf = CpuTopology.performanceThreads()
-        val big = models.bigMemoryDevice
+        val backend = models.encoderBackend ?: ru.partitrainer.omr.homr.EncoderBackend.INT8_CPU
+        // нейропроцессор (NNAPI) один на всех — прогоны энкодера через него не распараллеливаем
+        val serial = !models.bigMemoryDevice || backend.needsNnapi
         return HomrPipeline(
             files, threads = perf, staffWorkers = perf.coerceIn(1, 4), text = text,
-            decoderThreads = 1, encoderThreads = if (big) 1 else 2.coerceAtMost(perf), serialEncoder = !big,
+            decoderThreads = 1, encoderThreads = encoderThreads(), serialEncoder = serial, encoderBackend = backend,
         )
     }
+
+    /** Потоков на один прогон энкодера: при параллельном чтении строк — 1, иначе 2. */
+    private fun encoderThreads(): Int = if (models.bigMemoryDevice) 1 else 2.coerceAtMost(CpuTopology.performanceThreads())
 
     /** Рендер страницы и поиск нотоносцев (то, что можно делать параллельно с чтением предыдущей страницы). */
     private suspend fun prepare(pipeline: HomrPipeline, request: OmrRequest, page: Int, ctx: kotlin.coroutines.CoroutineContext): Pair<GrayImage, HomrPipeline.Located> {

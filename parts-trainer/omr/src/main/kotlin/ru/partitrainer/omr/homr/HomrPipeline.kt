@@ -43,6 +43,8 @@ class HomrPipeline(
     encoderThreads: Int = 0,
     /** Энкодер — по одному прогону за раз (экономия памяти при параллельном чтении строк). */
     private val serialEncoder: Boolean = false,
+    /** Способ запуска энкодера (ускоритель); файл модели должен ему соответствовать. null — обычные ядра процессора. */
+    private val encoderBackend: EncoderBackend? = null,
 ) : AutoCloseable {
     private val encLock = Any()
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
@@ -56,6 +58,7 @@ class HomrPipeline(
         if (n > 0) setIntraOpNumThreads(n)
         // Арена ORT растёт под каждый одновременный прогон и не отдаёт память; при параллельном чтении это сотни МБ
         if (System.getenv("HOMR_ARENA") != "1") setCPUArenaAllocator(false)
+        encoderBackend?.configure(this, if (n > 0) n else Runtime.getRuntime().availableProcessors())
     }
     private val segSession by lazy { env.createSession(files.segnet.path, opts) }
     private val encSession by lazy { env.createSession(files.encoder.path, encOpts) }

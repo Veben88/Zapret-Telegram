@@ -46,6 +46,19 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun update(f: (Settings) -> Settings) = viewModelScope.launch { c.settings.update(f) }
 
     val backupMessage = MutableStateFlow<String?>(null)
+    val tuneMessage = MutableStateFlow<String?>(null)
+    val tuneVersion = MutableStateFlow(0)
+
+    /** Полный подбор ускорителя энкодера (докачивает float-энкодер). */
+    fun tuneEncoder() = viewModelScope.launch {
+        tuneMessage.value = null
+        tuneMessage.value = try {
+            val threads = if (c.homrModels.bigMemoryDevice) 1 else 2.coerceAtMost(ru.partitrainer.omr.CpuTopology.performanceThreads())
+            c.homrModels.tune(full = true, threads = threads)
+            null
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { "Не удалось: ${e.message}" }
+        tuneVersion.value++
+    }
 
     fun exportBackup(uri: android.net.Uri) = viewModelScope.launch {
         backupMessage.value = try {
@@ -124,6 +137,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
                 Switch(s.omrLyrics, { v -> vm.update { it.copy(omrLyrics = v) } })
             }
+            EncoderTuneCard(vm)
             OutlinedButton(onClick = vm::clearCache, Modifier.heightIn(min = 48.dp)) { Text(stringResource(if (cleared) R.string.cache_cleared else R.string.clear_cache)) }
 
             HorizontalDivider()
@@ -194,6 +208,31 @@ private fun <T> Choice(options: List<Pair<T, Int>>, selected: T, onSelect: (T) -
     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
         options.forEachIndexed { i, (v, label) ->
             SegmentedButton(selected == v, { onSelect(v) }, SegmentedButtonDefaults.itemShape(i, options.size), Modifier.heightIn(min = 48.dp)) { Text(stringResource(label)) }
+        }
+    }
+}
+
+/** Ускоритель распознавания: что выбрано, итоги замеров и полный подбор. */
+@Composable
+private fun EncoderTuneCard(vm: SettingsViewModel) {
+    val status by vm.models.tuneStatus.collectAsState()
+    val msg by vm.tuneMessage.collectAsState()
+    val ver by vm.tuneVersion.collectAsState()
+    val backend = remember(ver, status) { vm.models.encoderBackend }
+    val report = remember(ver, status) { vm.models.benchReport }
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(stringResource(R.string.accel_title), style = MaterialTheme.typography.titleSmall)
+            Text(stringResource(R.string.accel_current, backend?.title ?: stringResource(R.string.accel_not_tuned)))
+            if (report.isNotBlank()) Text(report, style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.accel_hint, vm.models.floatEncoderSizeMb), style = MaterialTheme.typography.bodySmall)
+            if (status != null) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(status!!, style = MaterialTheme.typography.bodySmall)
+            } else {
+                OutlinedButton(onClick = vm::tuneEncoder, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.accel_tune)) }
+            }
+            msg?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
     }
 }

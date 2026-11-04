@@ -12,6 +12,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.partitrainer.omr.homr.EncoderBackend
+import ru.partitrainer.omr.homr.EncoderBench
+import ru.partitrainer.omr.homr.EncoderBenchResult
+import ru.partitrainer.omr.homr.EncoderVariant
+import ru.partitrainer.omr.homr.Fp16Converter
 import ru.partitrainer.omr.homr.HomrModelFiles
 import java.io.File
 import java.net.HttpURLConnection
@@ -76,8 +81,92 @@ class HomrModelManager(context: Context) {
 
     fun files(): HomrModelFiles? {
         if (!installed()) return null
-        dir.listFiles()?.filter { it.name.startsWith("encoder_") }?.forEach { it.delete() } // старый float-энкодер
-        return try { HomrModelFiles(fileOf(segnetSpec), ensureEncoder(), fileOf(specs[1])) } catch (e: Exception) { null }
+        // float-энкодер от прежних версий (уже проверен по SHA-256 при загрузке) — пригодится для подбора ускорителя
+        val oldFloat = File(dir, floatSpec.onnx)
+        if (oldFloat.isFile && !floatEncoderFile.isFile && job?.isActive != true) oldFloat.renameTo(floatEncoderFile)
+        return try { HomrModelFiles(fileOf(segnetSpec), encoderFor(encoderBackend ?: EncoderBackend.INT8_CPU), fileOf(specs[1])) } catch (e: Exception) { null }
+    }
+
+    // ---------- Подбор ускорителя для энкодера ----------
+
+    /** Оригинальный float-энкодер homr: нужен только для сравнения вариантов (float/fp16/NNAPI). */
+    private val floatSpec = Spec("encoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.zip", "encoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31.onnx",
+        "ee5767286c60dc3d567fe72b6560e7285261ede1535b4215153c199ab3057559", 48_281_161)
+    val floatEncoderFile get() = File(dir, "encoder-float.onnx")
+    val fp16EncoderFile get() = File(dir, "encoder-fp16.onnx")
+    val floatEncoderSizeMb = (floatSpec.zipBytes / 1_000_000).toInt()
+    private val prefs = appContext.getSharedPreferences("encoder", Context.MODE_PRIVATE)
+
+    /** Выбранный способ запуска энкодера; null — ещё не подбирали. */
+    var encoderBackend: EncoderBackend?
+        get() = EncoderBackend.parse(prefs.getString("backend", null))?.takeIf { encoderFileOrNull(it) != null }
+        set(v) { prefs.edit().putString("backend", v?.name).apply() }
+
+    /** Итоги последнего подбора (для экрана настроек). */
+    var benchReport: String
+        get() = prefs.getString("report", "") ?: ""
+        private set(v) { prefs.edit().putString("report", v).apply() }
+
+    /** Есть ли у процессора аппаратная арифметика fp16 (ARMv8.2-A, флаг asimdhp). */
+    val supportsFp16: Boolean by lazy { runCatching { File("/proc/cpuinfo").readText().contains("asimdhp") }.getOrDefault(false) }
+
+    private fun encoderFileOrNull(b: EncoderBackend): File? = when (b.model) {
+        EncoderBackend.Model.INT8 -> encoderFile.takeIf { it.isFile } ?: runCatching { ensureEncoder() }.getOrNull()
+        EncoderBackend.Model.FLOAT -> floatEncoderFile.takeIf { it.isFile }
+        EncoderBackend.Model.FP16 -> fp16EncoderFile.takeIf { it.isFile }
+    }
+
+    private fun encoderFor(b: EncoderBackend): File = encoderFileOrNull(b) ?: ensureEncoder()
+
+    private val _tuneStatus = MutableStateFlow<String?>(null)
+    /** Ход подбора (для экрана настроек); null — не идёт. */
+    val tuneStatus: StateFlow<String?> = _tuneStatus.asStateFlow()
+
+    /**
+     * Замеряет варианты запуска энкодера на тестовой строке и запоминает самый быстрый из тех, чей результат совпадает
+     * с эталоном (int8 на процессоре). [full] — ещё float/fp16/NNAPI (докачивает float-энкодер ≈48 МБ).
+     * [threads] — потоков на прогон, как при распознавании.
+     */
+    suspend fun tune(full: Boolean, threads: Int): List<EncoderBenchResult> = withContext(Dispatchers.Default) {
+        try {
+            val variants = arrayListOf(EncoderBackend.INT8_CPU, EncoderBackend.INT8_XNNPACK)
+            if (full) {
+                if (!floatEncoderFile.isFile) {
+                    _tuneStatus.value = "Скачивание float-энкодера…"
+                    var done = 0L
+                    download(floatSpec) { n -> done += n; _tuneStatus.value = "Скачивание float-энкодера: ${done * 100 / floatSpec.zipBytes}%" }
+                    if (!fileOf(floatSpec).renameTo(floatEncoderFile)) throw IllegalStateException("Не удалось сохранить энкодер")
+                }
+                variants += listOf(EncoderBackend.FLOAT_CPU, EncoderBackend.FLOAT_XNNPACK)
+                if (supportsFp16) {
+                    if (!fp16EncoderFile.isFile) {
+                        _tuneStatus.value = "Подготовка fp16-версии…"
+                        val tmp = File(dir, "encoder-fp16.onnx.part")
+                        tmp.writeBytes(Fp16Converter.convert(floatEncoderFile.readBytes()))
+                        if (!tmp.renameTo(fp16EncoderFile)) throw IllegalStateException("Не удалось сохранить fp16-энкодер")
+                    }
+                    variants += listOf(EncoderBackend.FP16_CPU, EncoderBackend.FP16_XNNPACK)
+                }
+                if (android.os.Build.VERSION.SDK_INT >= 27) variants += listOf(EncoderBackend.FLOAT_NNAPI, EncoderBackend.FLOAT_NNAPI_FP16)
+            }
+            _tuneStatus.value = "Замер скорости…"
+            val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+            val res = EncoderBench.compare(env, variants.map { b ->
+                EncoderVariant(b.name, encoderFor(b).path) { o -> o.setIntraOpNumThreads(threads.coerceAtLeast(1)); b.configure(o, threads) }
+            }, EncoderBench.sampleCanvas())
+            val best = res.filter { it.ok }.minByOrNull { it.ms }
+            best?.let { r -> encoderBackend = EncoderBackend.valueOf(r.name) }
+            benchReport = res.joinToString("\n") { r ->
+                val b = EncoderBackend.valueOf(r.name)
+                val mark = if (r === best) " ✓" else ""
+                when {
+                    r.error != null -> "${b.title}: не запустился"
+                    !r.ok -> "${b.title}: ${r.ms} мс, неточный результат"
+                    else -> "${b.title}: ${r.ms} мс$mark"
+                }
+            } + if (full && !supportsFp16) "\nfp16: процессор не поддерживает аппаратную арифметику fp16" else ""
+            res
+        } finally { _tuneStatus.value = null }
     }
 
     /** Копирует энкодер из assets и проверяет SHA-256 (повторно — только если файла нет или он повреждён). */
