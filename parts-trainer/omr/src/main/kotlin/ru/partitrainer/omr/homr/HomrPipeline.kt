@@ -67,18 +67,20 @@ class HomrPipeline(
     private val decSession by lazy { env.createSession(files.decoder.path, decOpts) }
     private val vocab = HomrVocab.fromResources()
 
-    /** Время этапов последней страницы, мс (для профилирования и тестов). */
-    val timings: MutableMap<String, Long> = java.util.Collections.synchronizedMap(LinkedHashMap())
+    /** Профиль последней распознанной страницы (время этапов, память). У каждой страницы свой — см. [Located.profile]. */
+    @Volatile var lastProfile: OmrProfile? = null
+    /** Время этапов последней страницы, мс (для тестов; только чтение). */
+    val timings: Map<String, Long> get() = lastProfile?.ms() ?: emptyMap()
     @Volatile var lastS2s: Staff2Score? = null
     /** Использовался ли быстрый поиск линеек без нейросети (последняя страница). */
     @Volatile var usedClassic = false
-    private inline fun <T> timed(name: String, block: () -> T): T {
-        val t0 = System.nanoTime()
-        try { return block() } finally { timings[name] = (timings[name] ?: 0L) + (System.nanoTime() - t0) / 1_000_000 }
-    }
 
     /** Результат поиска нотоносцев: выровненная страница, нотоносцы и системы. */
-    class Located(val page: GrayImage, val staves: List<DetectedStaff>, val systems: List<List<DetectedStaff>>, val angle: Double = 0.0)
+    class Located(
+        val page: GrayImage, val staves: List<DetectedStaff>, val systems: List<List<DetectedStaff>>, val angle: Double = 0.0,
+        /** Профиль страницы: поиск нотоносцев и дальнейшее чтение пишутся в один профиль. */
+        val profile: OmrProfile = OmrProfile(),
+    )
 
     /**
      * Находит нотоносцы. Быстрый путь — без нейросети (выравнивание по тёмным пикселям + поиск длинных тонких линий);
@@ -87,17 +89,20 @@ class HomrPipeline(
     fun locate(
         gray: GrayImage, accurate: Boolean,
         onProgress: (done: Int, total: Int, message: String) -> Unit, isCancelled: () -> Boolean,
+        profile: OmrProfile = OmrProfile(),
     ): Located {
-        var page = timed("prep") { ImageOps.clahe(ImageOps.resizeToHomrWidth(gray)) }
+        val resized = profile.stage("resize") { ImageOps.resizeToHomrWidth(gray) }
+        var page = profile.stage("clahe") { ImageOps.clahe(resized) }
+        profile.info["page"] = "${gray.width}x${gray.height} -> ${page.width}x${page.height}"
         if (!accurate) {
-            val located = timed("classic") {
+            val located = profile.stage("classic") {
                 val dark = ClassicStaffMask.dark(page)
                 val slope = ClassicStaffMask.estimateSlope(dark, page.width, page.height)
                 val angle = if (Math.abs(slope) > 0.005) Math.atan(slope) else 0.0
                 val p = if (angle != 0.0) ImageOps.rotate(page, angle) else page
                 val d = if (p === page) dark else ClassicStaffMask.dark(p)
                 val staves = StaffDetector.detect(ClassicStaffMask.mask(p, d))
-                if (staves.isEmpty()) null else Located(p, staves, StaffDetector.systems(staves, p), angle)
+                if (staves.isEmpty()) null else Located(p, staves, StaffDetector.systems(staves, p), angle, profile)
             }
             if (located != null) { usedClassic = true; return located }
         }
@@ -105,13 +110,14 @@ class HomrPipeline(
         if (!files.segnet.isFile) throw SegnetMissingException()
         onProgress(0, 1, "Сегментация нот")
         val segnet = Segnet(env, segSession)
-        fun segment(img: GrayImage) = timed("segnet") { segnet.segment(img) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") } }
+        fun segment(img: GrayImage) = profile.stage("segnet") { segnet.segment(img) { d, t -> onProgress(0, 1, "Сегментация нот ($d/$t)"); if (isCancelled()) throw InterruptedException("Отменено") } }
         var seg = segment(page)
-        val slope = timed("deskew") { StaffDetector.estimateSlope(seg) }
+        profile.info["segnetSkippedTiles"] = segnet.skippedTiles.toString()
+        val slope = profile.stage("deskew") { StaffDetector.estimateSlope(seg) }
         val angle = if (Math.abs(slope) > 0.005) Math.atan(slope) else 0.0
-        if (angle != 0.0) timed("deskew") { page = ImageOps.rotate(page, angle); seg = seg.rotated(angle) }
-        val staves = timed("detect") { StaffDetector.detect(seg) }
-        return Located(page, staves, if (staves.isEmpty()) emptyList() else StaffDetector.systems(staves, page), angle)
+        if (angle != 0.0) profile.stage("deskew") { page = ImageOps.rotate(page, angle); seg = seg.rotated(angle) }
+        val staves = profile.stage("detect") { StaffDetector.detect(seg) }
+        return Located(page, staves, if (staves.isEmpty()) emptyList() else profile.stage("detect") { StaffDetector.systems(staves, page) }, angle, profile)
     }
 
     /** Шаги: сегментация (0..1), затем по одному на нотоносец. */
@@ -125,25 +131,29 @@ class HomrPipeline(
         /** Уже найденные нотоносцы (подготовлены заранее, пока читалась предыдущая страница). */
         located: Located? = null,
     ): PageTokens {
-        timings.clear()
         onProgress(0, 1, "Подготовка страницы")
         val loc = located ?: locate(gray, accurate, onProgress, isCancelled)
+        val prof = loc.profile.also { lastProfile = it }
         val page = loc.page; val staves = loc.staves; val systems = loc.systems
+        prof.info["staves"] = staves.size.toString()
         if (staves.isEmpty()) return PageTokens(0, emptyList(), emptyList(), emptyList())
         val chosen = systems.mapNotNull { sys -> (staffInSystem?.takeIf { it < sys.size } ?: if (staffInSystem != null) null else StaffDetector.indexInSystem(selection, sys.size))?.let { sys[it] } }
         val s2s = Staff2Score(env, encSession, decSession, vocab, if (serialEncoder) encLock else null)
-        val canvases = chosen.map { st -> staffCanvas(page, st, staves) }
-        val result = predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, chosen.size, "Чтение нотоносца $done из ${chosen.size}") }
-        result.forEachIndexed { i, t -> mapToPage(t, chosen[i], staves) }
+        lastS2s = s2s
+        val canvases = prof.stage("canvas") { chosen.map { st -> staffCanvas(page, st, staves) } }
+        val result = transformer(prof, s2s) { predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, chosen.size, "Чтение нотоносца $done из ${chosen.size}") } }
+        prof.stage("postprocess") { result.forEachIndexed { i, t -> mapToPage(t, chosen[i], staves) } }
         val read = text?.let { rec ->
             onProgress(chosen.size, chosen.size, "Распознавание текста")
-            chosen.map { st -> if (isCancelled()) throw InterruptedException("Отменено"); Lyrics.read(rec, page, st, nextStaffOf(st, staves)) }
+            prof.stage("lyrics") { chosen.map { st -> if (isCancelled()) throw InterruptedException("Отменено"); Lyrics.read(rec, page, st, nextStaffOf(st, staves)) } }
         } ?: emptyList()
         val lyrics = read.map { it.first }
         onProgress(chosen.size, chosen.size, "Страница готова")
-        val columns = chosen.map { st ->
-            val sys = systems.firstOrNull { st in it } ?: listOf(st)
-            Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(result[chosen.indexOf(st)])).measures.size)
+        val columns = prof.stage("postprocess") {
+            chosen.map { st ->
+                val sys = systems.firstOrNull { st in it } ?: listOf(st)
+                Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(result[chosen.indexOf(st)])).measures.size)
+            }
         }
         return PageTokens(staves.size, result, staves, chosen, lyrics, columns, read.map { it.second })
     }
@@ -158,21 +168,22 @@ class HomrPipeline(
         isCancelled: () -> Boolean = { false },
         located: Located? = null,
     ): List<List<StaffRead>> {
-        timings.clear()
         onProgress(0, 1, "Подготовка страницы")
         val loc = located ?: locate(gray, accurate, onProgress, isCancelled)
+        val prof = loc.profile.also { lastProfile = it }
         val page = loc.page; val staves = loc.staves; val systems = loc.systems
+        prof.info["staves"] = staves.size.toString()
         if (staves.isEmpty()) return emptyList()
         val s2s = Staff2Score(env, encSession, decSession, vocab, if (serialEncoder) encLock else null)
         lastS2s = s2s
         val total = staves.size
         val jobs = ArrayList<Triple<Int, Int, DetectedStaff>>()           // система, номер в системе, нотоносец
         for ((si, sys) in systems.withIndex()) for ((i, st) in sys.withIndex()) jobs += Triple(si, i, st)
-        val canvases = jobs.map { (_, _, st) -> timed("canvas") { staffCanvas(page, st, staves) } }
-        val allTokens = timed("transformer") {
+        val canvases = prof.stage("canvas") { jobs.map { (_, _, st) -> staffCanvas(page, st, staves) } }
+        val allTokens = transformer(prof, s2s) {
             predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, total, "Чтение нотоносца $done из $total") }
         }
-        allTokens.forEachIndexed { i, t -> mapToPage(t, jobs[i].third, staves) }
+        prof.stage("postprocess") { allTokens.forEachIndexed { i, t -> mapToPage(t, jobs[i].third, staves) } }
         val out = ArrayList<List<StaffRead>>()
         for ((si, sys) in systems.withIndex()) {
             val reads = ArrayList<StaffRead>()
@@ -182,11 +193,12 @@ class HomrPipeline(
                 val notes = tokens.filter { it.rhythm.startsWith("note_") }.mapNotNull { TokenParser.midi(it.pitch, it.lift) }.sorted()
                 // начало строк в системе выровнено — берём медиану (в сканах край отдельной строки «плавает»)
                 val leftEdge = sys.map { it.minX }.sorted().let { it[it.size / 2] }.toDouble()
-                val octScore = StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
+                val octScore = prof.stage("postprocess") { StaffDetector.octaveMarkScore(page, st, sys.getOrNull(i + 1)?.minY, leftEdge) }
                 val oct = octScore > OCTAVE_MARK_THRESHOLD
-                val txt = text?.let { rec -> Lyrics.read(rec, page, st, nextStaffOf(st, staves)) }
+                val txt = text?.let { rec -> prof.stage("lyrics") { Lyrics.read(rec, page, st, nextStaffOf(st, staves)) } }
+                val cols = prof.stage("postprocess") { Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(tokens)).measures.size) }
                 reads += StaffRead(st, si, i, tokens, clef, oct && clef != 'F', notes.getOrNull(notes.size / 2), octScore, txt?.first.orEmpty(),
-                    Barlines.columns(page, st, sys, loc.angle, TokenParser.parse(listOf(tokens)).measures.size), txt?.second.orEmpty())
+                    cols, txt?.second.orEmpty())
             }
             out += reads
         }
@@ -208,10 +220,11 @@ class HomrPipeline(
      */
     fun scanSystem(gray: GrayImage, accurate: Boolean = false, maxSteps: Int = 80, isCancelled: () -> Boolean = { false }, located: Located? = null): List<StaffRead> {
         val loc = located ?: locate(gray, accurate, { _, _, _ -> }, isCancelled)
+        val prof = loc.profile.also { lastProfile = it }
         val sys = loc.systems.maxByOrNull { it.size } ?: return emptyList()
         val s2s = Staff2Score(env, encSession, decSession, vocab, if (serialEncoder) encLock else null)
-        val canvases = sys.map { staffCanvas(loc.page, it, loc.staves) }
-        val tokens = predictAll(s2s, canvases, isCancelled, maxSteps)
+        val canvases = prof.stage("canvas") { sys.map { staffCanvas(loc.page, it, loc.staves) } }
+        val tokens = transformer(prof, s2s) { predictAll(s2s, canvases, isCancelled, maxSteps) }
         val leftEdge = sys.map { it.minX }.sorted().let { it[it.size / 2] }.toDouble()
         return sys.mapIndexed { i, st ->
             val t = tokens[i]
@@ -220,6 +233,14 @@ class HomrPipeline(
             val oct = StaffDetector.octaveMarkScore(loc.page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
             StaffRead(st, loc.systems.indexOf(sys), i, t, clef, oct > OCTAVE_MARK_THRESHOLD && clef != 'F', notes.getOrNull(notes.size / 2), oct)
         }
+    }
+
+    /** Чтение строк: время по часам («transformer») и сумма по потокам энкодера и декодера. */
+    private fun <T> transformer(prof: OmrProfile, s2s: Staff2Score, block: () -> T): T {
+        val r = prof.stage("transformer", wall = true, block = block)
+        prof.add("encoder", s2s.encoderNanos.sum()); prof.add("decoder", s2s.decoderNanos.sum())
+        prof.info["decoderSteps"] = s2s.steps.sum().toString()
+        return r
     }
 
     private fun predictAll(

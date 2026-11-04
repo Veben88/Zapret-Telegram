@@ -13,6 +13,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import ru.partitrainer.R
@@ -109,6 +110,7 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
             return Result.failure(workDataOf(OmrJob.KEY_ERROR to it.reason, OmrJob.KEY_MANUAL to true))
         }
 
+        val started = System.currentTimeMillis()
         PageRenderer(File(job.filePath), job.isPdf).use { renderer ->
             val rotByPage = job.pages.zip(job.rotations).toMap()
             // что распознаём: партии из предварительного просмотра или строки по выбору
@@ -152,6 +154,9 @@ class OmrWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, p
                 return Result.failure(workDataOf(OmrJob.KEY_ERROR to "Не хватило памяти. Закройте другие приложения, выберите меньше страниц или используйте движок Claude Vision.", OmrJob.KEY_MANUAL to true))
             } catch (e: Exception) {
                 return Result.failure(workDataOf(OmrJob.KEY_ERROR to "Неожиданная ошибка распознавания: ${e.message ?: e.javaClass.simpleName}. Попробуйте ещё раз или введите ноты вручную.", OmrJob.KEY_MANUAL to true))
+            }
+            if (engine is HomrOnDeviceEngine && runCatching { c.settings.flow.first().omrProfile }.getOrDefault(false)) {
+                OmrReport.write(applicationContext, engine, System.currentTimeMillis() - started, job.pages.size, job.accurate, job.lyrics, units.size)
             }
             val b = base!!
             val score = b.score.copy(title = b.score.title ?: job.title, voices = voices)

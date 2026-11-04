@@ -213,6 +213,12 @@
     <string name="keys_octave_up">Клавиатура на октаву вправо</string>
     <string name="key_haptics">Вибрация при нажатии клавиш</string>
     <string name="set_backup">Резервная копия</string>
+    <string name="dev_show">Для разработчика…</string>
+    <string name="dev_hide">Скрыть раздел для разработчика</string>
+    <string name="dev_profile">Записывать отчёт о распознавании</string>
+    <string name="dev_profile_hint">Время каждого этапа и пиковая память при распознавании на устройстве. Отчёт хранится в телефоне; отправить его можно только вручную кнопкой «Поделиться».</string>
+    <string name="dev_no_report">Отчёта пока нет: включите запись и распознайте ноты.</string>
+    <string name="dev_share">Поделиться отчётом (JSON)</string>
     <string name="backup_hint">Все партии, исходные PDF/фото и раскладка тактов — одним файлом, который вы сохраняете сами (куда угодно). Пригодится перед переустановкой приложения или переносом на другое устройство. Автоматических облачных копий приложение не делает.</string>
     <string name="backup_save">Сохранить копию</string>
     <string name="backup_restore">Восстановить из копии</string>

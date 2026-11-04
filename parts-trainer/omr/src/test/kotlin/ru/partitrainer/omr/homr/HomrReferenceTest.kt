@@ -644,8 +644,8 @@ class HomrReferenceTest {
         var badA = 0; var badB = 0; var same = 0; var tot = 0; var prepA = 0L; var prepB = 0L; var staffA = 0; var staffB = 0
         HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
             for (n in names.split(',')) {
-                val ra = pl.recognizeAll(loadGray(File(da, "$n.png"))); prepA += (pl.timings["prep"] ?: 0)
-                val rb = pl.recognizeAll(loadGray(File(db, "$n.png"))); prepB += (pl.timings["prep"] ?: 0)
+                val ra = pl.recognizeAll(loadGray(File(da, "$n.png"))); prepA += (pl.timings["resize"] ?: 0) + (pl.timings["clahe"] ?: 0)
+                val rb = pl.recognizeAll(loadGray(File(db, "$n.png"))); prepB += (pl.timings["resize"] ?: 0) + (pl.timings["clahe"] ?: 0)
                 val ta = ra.flatten().map { it.tokens }; val tb = rb.flatten().map { it.tokens }
                 staffA += ta.size; staffB += tb.size
                 badA += ta.sumOf { bad(it) }; badB += tb.sumOf { bad(it) }

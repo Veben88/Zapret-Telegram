@@ -18,6 +18,7 @@ import ru.partitrainer.omr.homr.GrayImage
 import ru.partitrainer.omr.homr.HomrPipeline
 import ru.partitrainer.omr.homr.StaffDetector
 import ru.partitrainer.omr.homr.LayoutBuilder
+import ru.partitrainer.omr.homr.OmrProfile
 import ru.partitrainer.omr.homr.SysColumns
 import ru.partitrainer.core.omr.PageRef
 import ru.partitrainer.omr.homr.TextRecognizer
@@ -38,6 +39,11 @@ class HomrOnDeviceEngine(
     override suspend fun availability(): Availability =
         if (models.files() != null) Availability.Ready
         else Availability.Unavailable("Модели движка «На устройстве» не скачаны (≈${models.downloadSizeMb} МБ, один раз).")
+
+    /** Профили страниц (время этапов, память) — для отчёта «Для разработчика». Страницы, взятые из [choirPages], не повторяются. */
+    val pageProfiles: MutableList<OmrProfile> = java.util.Collections.synchronizedList(ArrayList())
+    /** Этапы уровня документа: разбор токенов и разметка исходника. */
+    val docProfile = OmrProfile("document")
 
     /** Прочитанные страницы хора (все нотоносцы) — чтобы четыре голоса не требовали четырёх прогонов. */
     private val choirPages = HashMap<Int, List<List<StaffRead>>>()
@@ -78,6 +84,7 @@ class HomrOnDeviceEngine(
                             onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) },
                             isCancelled = { !ctx.isActive }, located = loc,
                         )
+                        pageProfiles += loc.profile
                         tokens += r.staffs
                         lines += r.staffs.indices.map { r.lyrics.getOrNull(it).orEmpty() }
                         syls += r.staffs.indices.map { r.lyricSyls.getOrNull(it).orEmpty() }
@@ -99,9 +106,11 @@ class HomrOnDeviceEngine(
         if (tokens.isEmpty() || tokens.all { it.isEmpty() }) {
             throw OmrException("Нотоносцы на страницах не найдены. Проверьте, что страница ровная и чёткая, или введите ноты вручную.", offerManual = true)
         }
-        val parsed = TokenParser.parse(tokens, syllables = if (text != null) Lyrics.forStaffs(tokens, lines, syls) else emptyList())
-        val layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) })
-        return parsed.copy(layout = layout.copy(notes = mapOf("" to LayoutBuilder.notes(parsed, cols, slots))))
+        return docProfile.stage("parse") {
+            val parsed = TokenParser.parse(tokens, syllables = if (text != null) Lyrics.forStaffs(tokens, lines, syls) else emptyList())
+            val layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) })
+            parsed.copy(layout = layout.copy(notes = mapOf("" to LayoutBuilder.notes(parsed, cols, slots))))
+        }
     }
 
     private suspend fun recognizeChoir(files: ru.partitrainer.omr.homr.HomrModelFiles, request: OmrRequest, onProgress: (OmrProgress) -> Unit): OmrParsed {
@@ -134,7 +143,7 @@ class HomrOnDeviceEngine(
                             val (gray, loc) = next!!.second.await()
                             next = todo.getOrNull(todo.indexOf(page) + 1)?.let { it to prep(it) }
                             pipeline!!.recognizeAll(gray, accurate = request.accurate, onProgress = { _, _, msg -> onProgress(OmrProgress(i, request.pages.size, "Страница ${page + 1}: $msg")) }, isCancelled = { !ctx.isActive }, located = loc)
-                                .also { choirPages[page] = it }
+                                .also { choirPages[page] = it; pageProfiles += loc.profile }
                         }
                         if (request.part != null) {
                             val (t, s) = ru.partitrainer.omr.homr.Parts.tokensFor(request.part, systems)
@@ -162,9 +171,11 @@ class HomrOnDeviceEngine(
         if (tokens.isEmpty() || tokens.all { it.isEmpty() }) {
             throw OmrException("Нотоносцы на страницах не найдены. Проверьте, что страница ровная и чёткая, или введите ноты вручную.", offerManual = true)
         }
-        val parsed = TokenParser.parse(tokens, shift, if (text != null) Lyrics.forStaffs(tokens, lines, syls) else emptyList())
-        val layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) })
-        return parsed.copy(layout = layout.copy(notes = mapOf("" to LayoutBuilder.notes(parsed, cols, slots))))
+        return docProfile.stage("parse") {
+            val parsed = TokenParser.parse(tokens, shift, if (text != null) Lyrics.forStaffs(tokens, lines, syls) else emptyList())
+            val layout = LayoutBuilder.build(tokens, cols, slots, request.pages.map { PageRef(it, 0) })
+            parsed.copy(layout = layout.copy(notes = mapOf("" to LayoutBuilder.notes(parsed, cols, slots))))
+        }
     }
 
     /**
@@ -182,6 +193,15 @@ class HomrOnDeviceEngine(
             decoderThreads = 1, encoderThreads = encoderThreads(), serialEncoder = serial, encoderBackend = backend,
         )
     }
+
+    /** Сведения о настройке движка для отчёта разработчика. */
+    fun describeSetup(): Map<String, String> = mapOf(
+        "encoderBackend" to (models.encoderBackend?.name ?: "INT8_CPU (не подобран)"),
+        "performanceThreads" to CpuTopology.performanceThreads().toString(),
+        "staffWorkers" to CpuTopology.performanceThreads().coerceIn(1, 4).toString(),
+        "encoderThreads" to encoderThreads().toString(),
+        "bigMemoryDevice" to models.bigMemoryDevice.toString(),
+    )
 
     /** Потоков на один прогон энкодера: при параллельном чтении строк — 1, иначе 2. */
     private fun encoderThreads(): Int = if (models.bigMemoryDevice) 1 else 2.coerceAtMost(CpuTopology.performanceThreads())
@@ -207,9 +227,11 @@ class HomrOnDeviceEngine(
 
     /** Рендер страницы и поиск нотоносцев (то, что можно делать параллельно с чтением предыдущей страницы). */
     private suspend fun prepare(pipeline: HomrPipeline, request: OmrRequest, page: Int, ctx: kotlin.coroutines.CoroutineContext): Pair<GrayImage, HomrPipeline.Located> {
-        val bmp = request.provider.render(page)
-        val gray = try { toGray(bmp) } finally { bmp.recycle() }
-        return gray to pipeline.locate(gray, request.accurate, { _, _, _ -> }, { !ctx.isActive })
+        val prof = OmrProfile("page ${page + 1}")
+        val t0 = prof.begin("render")
+        val bmp = try { request.provider.render(page) } finally { prof.end("render", t0) }
+        val gray = try { prof.stage("gray") { toGray(bmp) } } finally { bmp.recycle() }
+        return gray to pipeline.locate(gray, request.accurate, { _, _, _ -> }, { !ctx.isActive }, prof)
     }
 
     private fun toGray(bmp: Bitmap): GrayImage {

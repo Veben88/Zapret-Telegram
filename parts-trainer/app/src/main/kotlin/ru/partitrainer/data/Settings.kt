@@ -42,6 +42,8 @@ data class Settings(
     val caretColor: CaretColor = CaretColor.ACCENT,
     /** Лёгкая вибрация при нажатии клавиш пианино. */
     val keyHaptics: Boolean = true,
+    /** «Для разработчика»: записывать отчёт о распознавании (время этапов, память). */
+    val omrProfile: Boolean = false,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -65,6 +67,7 @@ class SettingsRepository(private val context: Context) {
         val lyrics = booleanPreferencesKey("omr_lyrics")
         val caret = stringPreferencesKey("caret_color")
         val keyHaptics = booleanPreferencesKey("key_haptics")
+        val omrProfile = booleanPreferencesKey("omr_profile")
     }
 
     val flow: Flow<Settings> = context.dataStore.data.map { snapshot(it) }
@@ -78,6 +81,7 @@ class SettingsRepository(private val context: Context) {
             p[K.volume] = n.volume; p[K.other] = n.otherVoicesVolume; p[K.playOthers] = n.playOthers
             p[K.countIn] = n.countIn; p[K.phrase] = n.measuresPerPhrase; p[K.warned] = n.claudeWarningAccepted; p[K.accurate] = n.omrAccurate
             p[K.sustain] = n.sustain; p[K.lyrics] = n.omrLyrics; p[K.caret] = n.caretColor.name; p[K.keyHaptics] = n.keyHaptics
+            p[K.omrProfile] = n.omrProfile
         }
     }
 
@@ -100,6 +104,7 @@ class SettingsRepository(private val context: Context) {
             sustain = (p[K.sustain] ?: d.sustain).coerceIn(0f, 1f),
             omrLyrics = p[K.lyrics] ?: d.omrLyrics,
             keyHaptics = p[K.keyHaptics] ?: d.keyHaptics,
+            omrProfile = p[K.omrProfile] ?: d.omrProfile,
             caretColor = p[K.caret]?.let { runCatching { CaretColor.valueOf(it) }.getOrNull() } ?: d.caretColor,
         )
     }

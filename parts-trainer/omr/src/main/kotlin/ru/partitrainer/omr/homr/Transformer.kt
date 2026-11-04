@@ -62,8 +62,15 @@ class Staff2Score(
         const val STD = 0.1738
     }
 
-    /** Профилирование: суммарное время энкодера/декодера (мс) и число шагов декодера. */
-    @Volatile var encoderMs = 0L; @Volatile var decoderMs = 0L; @Volatile var steps = 0
+    /**
+     * Профилирование: суммарное время энкодера/декодера (нс, сумма по потокам — строки читаются параллельно) и число шагов
+     * декодера. Счётчики потокобезопасны (раньше `@Volatile var +=` из нескольких потоков терял прибавки).
+     */
+    val encoderNanos = java.util.concurrent.atomic.LongAdder()
+    val decoderNanos = java.util.concurrent.atomic.LongAdder()
+    val steps = java.util.concurrent.atomic.LongAdder()
+    val encoderMs: Long get() = encoderNanos.sum() / 1_000_000
+    val decoderMs: Long get() = decoderNanos.sum() / 1_000_000
 
     private val cacheIn = (0 until DEPTH * 4).map { "cache_in$it" }
     private val cacheOut = (0 until DEPTH * 4).map { "cache_out$it" }
@@ -86,7 +93,7 @@ class Staff2Score(
                     return FloatArray(ctx.floatBuffer.remaining()).also { a -> ctx.floatBuffer.duplicate().get(a) } to ctx.info.shape
                 }
             }
-        } finally { encoderMs += (System.nanoTime() - te) / 1_000_000 }
+        } finally { encoderNanos.add(System.nanoTime() - te) }
     }
 
     /** Чтение строк; батч (>1 строки за прогон) возможен только с декодером, у которого размер батча не зашит в модель. */
@@ -106,7 +113,7 @@ class Staff2Score(
         try {
             return decode(b, fullT, redT, isCancelled, maxSteps)
         } finally {
-            decoderMs += (System.nanoTime() - td) / 1_000_000
+            decoderNanos.add(System.nanoTime() - td)
             fullT.close(); redT.close()
         }
     }
@@ -152,7 +159,7 @@ class Staff2Score(
                     if (r == EOS) { done[row] = true; continue }
                     val p = argmaxLast(1, row); val l = argmaxLast(2, row)
                     val pos = argmaxLast(3, row); val a = argmaxLast(4, row); val s = argmaxLast(5, row)
-                    steps++
+                    steps.increment()
                     val sym = EncodedSymbol(vocab.rhythm[r], vocab.pitch[p], vocab.lift[l], vocab.articulation[a], vocab.slur[s], vocab.position[pos])
                     // центр внимания на холсте строки (x, y) — где декодер «смотрел», когда выдал этот символ
                     (result.get("attention").orElse(null) as? OnnxTensor)?.floatBuffer?.let { fb ->

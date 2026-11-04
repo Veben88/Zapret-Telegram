@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -188,6 +189,35 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text(stringResource(R.string.match_octave), Modifier.weight(1f))
                 Switch(s.matchOctave, { v -> vm.update { it.copy(matchOctave = v) } })
             }
+
+            HorizontalDivider()
+            DeveloperCard(s.omrProfile) { v -> vm.update { it.copy(omrProfile = v) } }
+        }
+    }
+}
+
+/** «Для разработчика» (свёрнуто): отчёт о распознавании — время этапов и память. Ничего не отправляется само. */
+@Composable
+private fun DeveloperCard(enabled: Boolean, onEnabled: (Boolean) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var open by rememberSaveable { mutableStateOf(false) }
+    val summary = remember(open, enabled) { if (open) ru.partitrainer.omr.OmrReport.summary(ctx) else null }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        TextButton(onClick = { open = !open }, Modifier.heightIn(min = 48.dp)) {
+            Text(stringResource(if (open) R.string.dev_hide else R.string.dev_show))
+        }
+        if (open) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.dev_profile))
+                    Text(stringResource(R.string.dev_profile_hint), style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(enabled, onEnabled)
+            }
+            if (summary != null) {
+                Text(summary, style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                OutlinedButton(onClick = { ru.partitrainer.omr.OmrReport.share(ctx) }, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.dev_share)) }
+            } else Text(stringResource(R.string.dev_no_report), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
