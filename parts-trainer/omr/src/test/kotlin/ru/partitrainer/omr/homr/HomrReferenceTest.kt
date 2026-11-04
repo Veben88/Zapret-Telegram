@@ -724,4 +724,75 @@ class HomrReferenceTest {
             println("PREFETCH sequential ${t1 - t0} ms, prefetch ${t2 - t1} ms, same=${seq == par}")
         }
     }
+
+    /** Позиции (голоса по штилям): HOMR_POS=dir:p1,... — сколько нот upper/upper2/lower/lower2 и пример строки. */
+    @Test fun positionsDump() {
+        val spec = System.getenv("HOMR_POS")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val reads = pl.recognizeAll(loadGray(File(dir, "$name.png")))
+                    val cnt = reads.flatten().flatMap { it.tokens }.filter { it.rhythm.startsWith("note_") }.groupingBy { it.position }.eachCount()
+                    println("POS $name: $cnt")
+                    val ex = reads.flatten().firstOrNull { r -> r.tokens.any { it.position == "upper2" } }
+                    if (ex != null) println("POS   example sys${ex.system}/${ex.indexInSystem}: " + ex.tokens.take(40).joinToString(" ") { "${it.rhythm}:${it.pitch}:${it.position}" })
+                }
+            }
+        }
+    }
+
+    /** Голоса по штилям против деления по высоте: HOMR_VOICES=dir:p1,... — «битые» такты в каждом голосе. */
+    @Test fun stemVoicesVsPitch() {
+        val spec = System.getenv("HOMR_VOICES")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        fun bad(t: List<EncodedSymbol>) = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(TokenParser.parse(listOf(t))).size
+        var oldBad = 0; var newBad = 0; var staves = 0; var notesOld = 0; var notesNew = 0
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    for (r in pl.recognizeAll(loadGray(File(dir, "$name.png"))).flatten()) {
+                        if (!Divisi.hasStemVoices(r.tokens)) continue
+                        staves++
+                        val a = Divisi.splitByPitch(r.tokens); val b = Divisi.split(r.tokens)
+                        val ob = bad(a.upper) + bad(a.lower); val nb = bad(b.upper) + bad(b.lower)
+                        oldBad += ob; newBad += nb
+                        fun n(t: List<EncodedSymbol>) = t.count { it.rhythm.startsWith("note_") }
+                        notesOld += n(a.upper) + n(a.lower); notesNew += n(b.upper) + n(b.lower)
+                        if (ob != nb) println("VOICES $name sys${r.system}/${r.indexInSystem}: pitch bad $ob, stems bad $nb")
+                    }
+                }
+            }
+        }
+        println("VOICES TOTAL staves with 2 voices $staves: bad measures pitch $oldBad -> stems $newBad; notes $notesOld / $notesNew")
+    }
+
+    /** Триоли без цифры: HOMR_TRIP=dir:p1,... — «битые» такты по голосам хора без и с восстановлением. */
+    @Test fun tripletRestoration() {
+        val spec = System.getenv("HOMR_TRIP")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        var before = 0; var after = 0; var changed = 0
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                val two = part.endsWith(":two").also { }
+                for (name in names.removeSuffix(":two").split(',')) {
+                    val systems = pl.recognizeAll(loadGray(File(dir, "$name.png")))
+                    for (v in ChoirVoice.values()) {
+                        val toks = if (two) ChoirAssigner.tokensForTwoStaff(v, systems) else ChoirAssigner.tokensFor(v, systems).first
+                        val b = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(TokenParser.parse(toks, restoreTriplets = false)).size
+                        val a = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(TokenParser.parse(toks)).size
+                        before += b; after += a
+                        if (Triplets.restore(toks) != toks) { changed++; println("TRIP $name ${v.name}: bad $b -> $a") }
+                    }
+                }
+            }
+        }
+        println("TRIP TOTAL bad $before -> $after, voices changed $changed")
+    }
 }

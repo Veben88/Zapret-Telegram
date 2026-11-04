@@ -60,7 +60,8 @@ object TokenParser {
      * @param staffs токены каждого нотоносца в порядке чтения.
      * @param syllables слоги по нотоносцам (параллельно [staffs]), по одному на «слоговую» ноту (см. [syllableSlots]); null — без слога.
      */
-    fun parse(staffs: List<List<EncodedSymbol>>, transpose: Int = 0, syllables: List<List<String?>> = emptyList()): OmrParsed {
+    fun parse(staffsIn: List<List<EncodedSymbol>>, transpose: Int = 0, syllables: List<List<String?>> = emptyList(), restoreTriplets: Boolean = true): OmrParsed {
+        val staffs = if (restoreTriplets) Triplets.restore(staffsIn) else staffsIn
         var fifths: Int? = null
         val sigs = java.util.TreeMap<Int, Int>()   // номер такта → знаменатель размера
         val pendingSigs = ArrayList<Int>()          // знаки размера, ещё не привязанные к такту

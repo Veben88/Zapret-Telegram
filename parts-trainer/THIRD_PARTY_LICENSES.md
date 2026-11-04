@@ -26,3 +26,4 @@ MusicXML/MXL (`XmlPullParser`, `ZipInputStream`) и MIDI (SMF), экспорт M
 ## Не включено намеренно
 * **TarsosDSP** — GPL-3.0 (определение высоты написано самостоятельно).
 * **Andromr** — Python/Kivy-приложение, не используется.
+* **Восстановление триолей** (`omr/.../Triplets.kt`) — перенос алгоритма `homr/triplet_restoration.py` из [homr](https://github.com/liebharc/homr) на Kotlin, AGPL-3.0.
