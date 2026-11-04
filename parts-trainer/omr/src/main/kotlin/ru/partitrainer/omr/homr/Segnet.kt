@@ -30,7 +30,8 @@ class SegMap(val width: Int, val height: Int, val cls: ByteArray) {
 }
 
 /**
- * Сегментация нотной страницы нейросетью segnet (ONNX), без перекрытия окон (шаг = 320, как в homr).
+ * Сегментация нотной страницы нейросетью segnet (ONNX), окна 320×320 с шагом 320, как в homr. Последний ряд/столбец окон
+ * сдвигается к краю страницы и перекрывает соседний, если размер не кратен 320.
  * Вход — «сырые» значения яркости 0..255, три одинаковых канала.
  */
 class Segnet(private val env: OrtEnvironment, private val session: OrtSession, private val batchSize: Int = 8) {
@@ -41,24 +42,38 @@ class Segnet(private val env: OrtEnvironment, private val session: OrtSession, p
         const val WIN = 320
         /** Порог «чистой бумаги». */
         const val BLANK_LEVEL = 235
+
+        /** Начала окон по одной оси (как в homr: шаг [WIN], последнее окно прижато к краю; меньше окна — одно окно с 0). */
+        fun starts(size: Int): List<Int> = (0 until maxOf(size, WIN) step WIN).map { maxOf(0, minOf(it, size - WIN)) }.distinct()
     }
 
     private val inputName = session.inputNames.first()
 
-    fun segment(page: GrayImage, onProgress: (Int, Int) -> Unit = { _, _ -> }): SegMap {
-        val h = page.height; val w = page.width
-        // Координаты окон: как в inference() + merge_patches()
-        val ys = (0 until maxOf(h, WIN) step WIN).map { minOf(it, h - WIN) }
-        val xs = (0 until maxOf(w, WIN) step WIN).map { minOf(it, w - WIN) }
-        val recon = FloatArray(w * h)
-        val weight = ByteArray(w * h)
+    fun segment(page: GrayImage, strategy: SegMerge.Strategy = SegMerge.Strategy.DEFAULT, onProgress: (Int, Int) -> Unit = { _, _ -> }): SegMap {
+        val merge = SegMerge(page.width, page.height, starts(page.height), starts(page.width), strategy)
+        runTiles(page, tiles(page), onProgress) { y0, x0, scores, base, classes -> merge.add(y0, x0, scores, base, classes) }
+        return merge.result()
+    }
+
+    /** Окна страницы без пустых (чистая бумага — нейросеть всё равно разметит её как фон). */
+    fun tiles(page: GrayImage): List<IntArray> {
         val coords = ArrayList<IntArray>()
-        for (y in ys) for (x in xs) {
-            // Пустое окно (чистая бумага) нейросеть всё равно разметит как фон — не тратим на него время
+        for (y in starts(page.height)) for (x in starts(page.width)) {
             if (isBlank(page, x, y)) { skippedTiles++; continue }
             coords += intArrayOf(y, x)
         }
+        return coords
+    }
 
+    /**
+     * Прогоняет окна [coords] (y, x) через сеть. [onTile] получает выход сети для окна: оценки класса c в точке p окна
+     * лежат в `scores[base + c * WIN * WIN + p]`. Части окна за краем страницы заполняются белым.
+     */
+    fun runTiles(
+        page: GrayImage, coords: List<IntArray>, onProgress: (Int, Int) -> Unit = { _, _ -> },
+        onTile: (y0: Int, x0: Int, scores: java.nio.FloatBuffer, base: Int, classes: Int) -> Unit,
+    ) {
+        val h = page.height; val w = page.width
         var done = 0
         var i = 0
         if (coords.isEmpty()) onProgress(0, 0)
@@ -78,32 +93,14 @@ class Segnet(private val env: OrtEnvironment, private val session: OrtSession, p
             OnnxTensor.createTensor(env, FloatBuffer.wrap(input), longArrayOf(n.toLong(), 3, WIN.toLong(), WIN.toLong())).use { t ->
                 session.run(mapOf(inputName to t)).use { res ->
                     val out = res[0] as OnnxTensor
-                    val shape = out.info.shape            // [n, C, 320, 320]
-                    val classes = shape[1].toInt()
+                    val classes = out.info.shape[1].toInt()           // [n, C, 320, 320]
                     val buf = out.floatBuffer
-                    val plane = WIN * WIN
-                    for (b in 0 until n) {
-                        val (y0, x0) = coords[i + b].let { it[0] to it[1] }
-                        val base = b * classes * plane
-                        for (p in 0 until plane) {
-                            var best = 0; var bv = buf.get(base + p)
-                            for (c in 1 until classes) { val v = buf.get(base + c * plane + p); if (v > bv) { bv = v; best = c } }
-                            val sy = y0 + p / WIN; val sx = x0 + p % WIN
-                            if (sy in 0 until h && sx in 0 until w) { val o = sy * w + sx; recon[o] += best.toFloat(); weight[o]++ }
-                        }
-                    }
+                    for (b in 0 until n) onTile(coords[i + b][0], coords[i + b][1], buf, b * classes * WIN * WIN, classes)
                 }
             }
             i += n; done += n
             onProgress(done, coords.size)
         }
-        val cls = ByteArray(w * h)
-        for (k in cls.indices) {
-            if (weight[k].toInt() == 0) continue   // не размечено (пропущенные пустые окна) — фон
-            val wt = weight[k].toInt()
-            cls[k] = (recon[k] / wt).toInt().toByte()   // усечение, как astype(int64) в homr
-        }
-        return SegMap(w, h, cls)
     }
 
     /** Окно пустое, если все его пиксели светлее порога (после CLAHE бумага ≈ 255). */
@@ -114,5 +111,110 @@ class Segnet(private val env: OrtEnvironment, private val session: OrtSession, p
             for (x in maxOf(0, x0) until xe) if ((page.data[row + x].toInt() and 0xFF) < BLANK_LEVEL) return false
         }
         return true
+    }
+}
+
+/**
+ * Склейка окон сегментации в карту классов страницы.
+ *
+ * Окна идут с шагом 320 без перекрытия, кроме последнего ряда/столбца, прижатого к краю: там пиксель покрыт двумя (в углу —
+ * четырьмя) окнами. В homr (и в этом порте до ноября 2026) номера классов, выбранные в каждом окне, усреднялись — при
+ * несогласии окон получался третий класс: фон 0 + линейка 4 → 2 «головка ноты», штиль 1 + линейка 4 → 2, головка 2 +
+ * линейка 4 → 3 «ключ». Это [Strategy.ID_AVERAGE], оставлено для сравнения.
+ *
+ * Память: вне полос перекрытия класс пишется сразу (1 байт на пиксель), в полосах — суммы по классам.
+ */
+class SegMerge(
+    val width: Int, val height: Int, ys: List<Int>, xs: List<Int>,
+    val strategy: Strategy = Strategy.DEFAULT,
+) {
+    enum class Strategy {
+        /** Среднее номеров классов с усечением (как в homr) — ошибочно, только для сравнения. */
+        ID_AVERAGE,
+        /** Голосование окон за класс; ничья — у кого выше вероятность. */
+        VOTE,
+        /** Сумма вероятностей (softmax) по окнам, затем лучший класс. */
+        PROB_SUM,
+        /** Класс окна, которое увереннее всех. */
+        MAX_PROB;
+
+        companion object { val DEFAULT = MAX_PROB }
+    }
+
+    private val cls = ByteArray(width * height)
+    /** Полоса перекрытия по строкам [rLo, rHi) на всю ширину и по столбцам [cLo, cHi) на всю высоту. */
+    private val rLo: Int; private val rHi: Int; private val cLo: Int; private val cHi: Int
+    private val rowBand: Int; private val bandSize: Int
+    private var k = 0
+    private var acc: FloatArray? = null
+    private var cnt: ByteArray? = null
+
+    init {
+        fun band(starts: List<Int>, size: Int): Pair<Int, Int> {
+            if (starts.size < 2) return 0 to 0
+            val last = starts.last(); val prevEnd = minOf(size, starts[starts.size - 2] + Segnet.WIN)
+            return if (last < prevEnd) last to prevEnd else 0 to 0
+        }
+        val (a, b) = band(ys, height); rLo = a; rHi = b
+        val (c, d) = band(xs, width); cLo = c; cHi = d
+        rowBand = (rHi - rLo) * width
+        bandSize = rowBand + height * (cHi - cLo)
+    }
+
+    /** Номер пикселя в полосах перекрытия или -1. */
+    private fun bandIndex(x: Int, y: Int): Int = when {
+        y in rLo until rHi -> (y - rLo) * width + x
+        x in cLo until cHi -> rowBand + y * (cHi - cLo) + (x - cLo)
+        else -> -1
+    }
+
+    /** Добавить окно с левым верхним углом (x0, y0): оценки класса c в точке p окна — `scores[base + c * WIN² + p]`. */
+    fun add(y0: Int, x0: Int, scores: java.nio.FloatBuffer, base: Int, classes: Int) {
+        val win = Segnet.WIN; val plane = win * win
+        if (acc == null && bandSize > 0) { k = classes; acc = FloatArray(bandSize * classes); cnt = ByteArray(bandSize) }
+        val prob = FloatArray(classes)
+        for (p in 0 until plane) {
+            val sy = y0 + p / win; val sx = x0 + p % win
+            if (sy !in 0 until height || sx !in 0 until width) continue
+            var best = 0; var bv = scores.get(base + p)
+            for (c in 1 until classes) { val v = scores.get(base + c * plane + p); if (v > bv) { bv = v; best = c } }
+            val bi = bandIndex(sx, sy)
+            if (bi < 0) { cls[sy * width + sx] = best.toByte(); continue }
+            val a = acc!!; val o = bi * k
+            cnt!![bi] = (cnt!![bi] + 1).toByte()
+            when (strategy) {
+                Strategy.ID_AVERAGE -> a[o] += best.toFloat()
+                Strategy.VOTE -> a[o + best] += 1f + 0.001f * softmax(scores, base, plane, p, classes, prob)[best]
+                Strategy.PROB_SUM -> { softmax(scores, base, plane, p, classes, prob); for (c in 0 until classes) a[o + c] += prob[c] }
+                Strategy.MAX_PROB -> {
+                    val pb = softmax(scores, base, plane, p, classes, prob)[best]
+                    if (pb > a[o]) { a[o] = pb; a[o + 1] = best.toFloat() }
+                }
+            }
+        }
+    }
+
+    private fun softmax(scores: java.nio.FloatBuffer, base: Int, plane: Int, p: Int, classes: Int, out: FloatArray): FloatArray {
+        var m = Float.NEGATIVE_INFINITY
+        for (c in 0 until classes) { val v = scores.get(base + c * plane + p); out[c] = v; if (v > m) m = v }
+        var sum = 0f
+        for (c in 0 until classes) { val e = Math.exp((out[c] - m).toDouble()).toFloat(); out[c] = e; sum += e }
+        for (c in 0 until classes) out[c] /= sum
+        return out
+    }
+
+    fun result(): SegMap {
+        val a = acc; val n = cnt
+        if (a != null && n != null) for (y in 0 until height) for (x in 0 until width) {
+            val bi = bandIndex(x, y); if (bi < 0 || n[bi].toInt() == 0) continue
+            val o = bi * k
+            val c = when (strategy) {
+                Strategy.ID_AVERAGE -> (a[o] / n[bi]).toInt()      // усечение, как astype(int64) в homr
+                Strategy.MAX_PROB -> a[o + 1].toInt()
+                else -> { var best = 0; for (j in 1 until k) if (a[o + j] > a[o + best]) best = j; best }
+            }
+            cls[y * width + x] = c.toByte()
+        }
+        return SegMap(width, height, cls)
     }
 }
