@@ -231,4 +231,6 @@
     <string name="parts_lower">, нижний голос (штили вниз)</string>
     <string name="parts_picked">Будут распознаны отмеченные партии: %1$d</string>
     <string name="parts_none_picked">Партии не отмечены — распознаётся строка по выбору ниже.</string>
+    <string name="parts_change">Голос…</string>
+    <string name="parts_piano">Фортепиано</string>
 </resources>

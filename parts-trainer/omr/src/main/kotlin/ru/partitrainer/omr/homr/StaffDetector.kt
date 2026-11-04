@@ -360,6 +360,63 @@ object StaffDetector {
         var y1 = (staff.bottomAt(xl) + 3.2 * u).toInt()
         if (nextStaffTop != null) y1 = min(y1, (nextStaffTop - 0.4 * u).toInt())
         if (y1 <= y0 || x1 <= x0) return 0.0
+        // Доля тёмных пикселей окна, кроме слов подтекстовки: «(Uu)», «Le-» и т.п. стоят целиком ниже нотоносца и имеют
+        // соседние буквы слева/справа. «8», приклеенная к хвосту ключа или стоящая отдельно, так не выглядит.
+        val pad = (1.8 * u).toInt()
+        val ax0 = max(0, x0 - pad); val ax1 = min(page.width, x1 + pad)
+        val ay0 = max(0, y0 - (2.0 * u).toInt()); val ay1 = min(page.height, y1 + (0.4 * u).toInt())
+        val w = ax1 - ax0; val h = ay1 - ay0
+        if (w <= 0 || h <= 0) return 0.0
+        val dark = BooleanArray(w * h) { page[ax0 + it % w, ay0 + it / w] < 110 }
+        val label = IntArray(w * h)
+        val textLike = HashSet<Int>()
+        var next = 1
+        val stack = IntArray(w * h)
+        val staffBottom = staff.bottomAt(xl)
+        for (start in 0 until w * h) {
+            if (!dark[start] || label[start] != 0) continue
+            var sp = 0; stack[sp++] = start; label[start] = next
+            var minX = w; var maxX = -1; var minY = h; var maxY = -1
+            while (sp > 0) {
+                val q = stack[--sp]; val qx = q % w; val qy = q / w
+                if (qx < minX) minX = qx; if (qx > maxX) maxX = qx; if (qy < minY) minY = qy; if (qy > maxY) maxY = qy
+                for ((dx, dy) in OCT_NEIGH) {
+                    val nx = qx + dx; val ny = qy + dy
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+                    val k = ny * w + nx
+                    if (dark[k] && label[k] == 0) { label[k] = next; stack[sp++] = k }
+                }
+            }
+            val id = next++
+            if (ay0 + minY < staffBottom + 0.8 * u) continue          // начинается в нотоносце — ключ с «8», не слово
+            fun neighbourDark(fromX: Int, toX: Int): Boolean {
+                var c = 0; var t = 0
+                for (yy in minY..maxY) for (xx in max(0, fromX)..min(w - 1, toX)) { t++; if (dark[yy * w + xx] && label[yy * w + xx] != id) c++ }
+                return t > 0 && c.toDouble() / t > 0.03
+            }
+            val gap = (0.25 * u).toInt(); val reach = (1.3 * u).toInt()
+            if (neighbourDark(maxX + gap, maxX + reach) || neighbourDark(minX - reach, minX - gap)) textLike += id
+        }
+        var darkIn = 0; var total = 0
+        for (y in max(0, y0) until min(page.height, y1)) for (x in max(0, x0) until min(page.width, x1)) {
+            total++
+            val k = (y - ay0) * w + (x - ax0)
+            if (dark[k] && label[k] !in textLike) darkIn++
+        }
+        return if (total == 0) 0.0 else darkIn.toDouble() / total
+    }
+
+    private val OCT_NEIGH = arrayOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)
+
+    /** Прежняя оценка «8»: доля тёмных пикселей в окне под ключом (без разбора на связные области). */
+    fun octaveMarkScoreSimple(page: GrayImage, staff: DetectedStaff, nextStaffTop: Int?, leftX: Double = staff.minX.toDouble()): Double {
+        val u = staff.unit
+        val x0 = (leftX + OCT_X0 * u).toInt(); val x1 = (leftX + OCT_X1 * u).toInt()
+        val xl = leftX + 2 * u
+        val y0 = (staff.bottomAt(xl) + 1.5 * u).toInt()
+        var y1 = (staff.bottomAt(xl) + 3.2 * u).toInt()
+        if (nextStaffTop != null) y1 = min(y1, (nextStaffTop - 0.4 * u).toInt())
+        if (y1 <= y0 || x1 <= x0) return 0.0
         var dark = 0; var total = 0
         for (y in max(0, y0) until min(page.height, y1)) for (x in max(0, x0) until min(page.width, x1)) { total++; if (page[x, y] < 110) dark++ }
         return if (total == 0) 0.0 else dark.toDouble() / total

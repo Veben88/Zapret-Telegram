@@ -860,4 +860,63 @@ class HomrReferenceTest {
             }
         }
     }
+
+    /** Сводка по набору: HOMR_SURVEY2=dir:prefix1,prefix2 — по каждой странице нотоносцы, партии, черты, «битые» такты, время. */
+    @Test fun survey2() {
+        val spec = System.getenv("HOMR_SURVEY2")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val (dir, prefixes) = spec!!.split(':')
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        fun bad(t: List<EncodedSymbol>) = ru.partitrainer.core.omr.ClaudeOmr.badMeasures(TokenParser.parse(listOf(t))).size
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            for (prefix in prefixes.split(',')) {
+                val pages = File(dir).listFiles()!!.filter { it.name.startsWith("$prefix-") && it.name.endsWith(".png") && !it.name.contains("_") }.sortedBy { it.name }
+                var tStaves = 0; var tBad = 0; var tBarOk = 0; var tMs = 0L
+                for (pg in pages) {
+                    val gray = loadGray(pg)
+                    val t0 = System.currentTimeMillis()
+                    val loc = pl.locate(gray, false, { _, _, _ -> }, { false })
+                    val reads = pl.recognizeAll(gray, located = loc)
+                    val ms = System.currentTimeMillis() - t0
+                    val parts = if (reads.isNotEmpty()) Parts.describe(reads.maxBy { it.size }) else emptyList()
+                    val flat = reads.flatten()
+                    val b = flat.sumOf { bad(it.tokens) }
+                    val barOk = flat.count { r -> r.columns != null && r.columns.xs.size - 1 == TokenParser.parse(listOf(r.tokens)).measures.size }
+                    tStaves += flat.size; tBad += b; tBarOk += barOk; tMs += ms
+                    println("S2 ${pg.name}: classic=${pl.usedClassic} systems=${reads.map { it.size }} bad=$b bars=$barOk/${flat.size} ${ms}ms parts=[" + parts.joinToString(", ") { it.name + if (it.stemVoice > 0) "/v" + it.stemVoice else "" } + "] clefs=" + (reads.maxByOrNull { it.size } ?: emptyList()).joinToString(" ") { "${it.clef}${if (it.octave8) "8" else ""}:${it.medianMidi}" })
+                }
+                println("S2 TOTAL $prefix: pages ${pages.size}, staves $tStaves, bad measures $tBad, barlines ok $tBarOk/$tStaves, ${tMs / 1000}s")
+            }
+        }
+    }
+
+    /** «8» на SATB-страницах (у строки 2 из 4 — есть, у 0 и 1 — нет): HOMR_OCT=dir:p1,... */
+    @Test fun octaveDetectors() {
+        val spec = System.getenv("HOMR_OCT")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        val tenNew = ArrayList<Double>(); val othNew = ArrayList<Double>(); val tenOld = ArrayList<Double>(); val othOld = ArrayList<Double>()
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder"))).use { pl ->
+            for (part in spec!!.split(';')) {
+                val (dir, names) = part.split(':')
+                for (name in names.split(',')) {
+                    val loc = pl.locate(loadGray(File(dir, "$name.png")), false, { _, _, _ -> }, { false })
+                    for (sys in loc.systems.filter { it.size == 4 }) {
+                        val left = sys.map { it.minX }.sorted()[2].toDouble()
+                        for (i in 0..2) {
+                            val nw = StaffDetector.octaveMarkScore(loc.page, sys[i], sys[i + 1].minY, left)
+                            val od = StaffDetector.octaveMarkScoreSimple(loc.page, sys[i], sys[i + 1].minY, left)
+                            if (i == 2) { tenNew += nw; tenOld += od } else { othNew += nw; othOld += od }
+                        }
+                    }
+                }
+            }
+        }
+        fun q(l: List<Double>) = l.sorted().let { "n=${it.size} min=%.3f p10=%.3f med=%.3f p90=%.3f max=%.3f".format(it.first(), it[it.size / 10], it[it.size / 2], it[it.size * 9 / 10], it.last()) }
+        println("OCT new tenor ${q(tenNew)}"); println("OCT new other ${q(othNew)}")
+        println("OCT old tenor ${q(tenOld)}"); println("OCT old other ${q(othOld)}")
+        for (t in listOf(0.02, 0.03, 0.04, 0.05, 0.06)) {
+            println("OCT thr $t: new miss ${tenNew.count { it <= t }} false ${othNew.count { it > t }}; old miss ${tenOld.count { it <= t }} false ${othOld.count { it > t }}")
+        }
+    }
 }

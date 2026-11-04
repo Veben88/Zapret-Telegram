@@ -31,6 +31,16 @@ object Divisi {
     fun hasStemVoices(tokens: List<EncodedSymbol>) = tokens.any { (it.rhythm.startsWith("note_") || it.rhythm.startsWith("rest_")) && it.position.endsWith("2") }
 
     /**
+     * Строка действительно записана двумя голосами (дивизи), а не изредка встречается нота со штилем вниз:
+     * второй голос — не меньше четверти нот и не меньше 4 нот.
+     */
+    fun isTwoVoiceStaff(tokens: List<EncodedSymbol>): Boolean {
+        val notes = tokens.filter { it.rhythm.startsWith("note_") }
+        val second = notes.count { it.position.endsWith("2") }
+        return second >= 4 && second >= 0.25 * notes.size
+    }
+
+    /**
      * Первый (верхний) голос строки. Если модель разметила голоса штилями — по ним, иначе строка как есть.
      * Нужен для партии, у которой на своей строке изредка встречается второй голос (дивизи внутри партии).
      */

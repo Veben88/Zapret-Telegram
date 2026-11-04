@@ -30,7 +30,8 @@ class PartsTest {
     }
 
     @Test fun divisiOnOneStaffGivesTwoParts() {
-        val two = listOf(s("clef_G2"), n("note_4", "E5"), s("chord"), n("note_4", "C5", "upper2"), n("note_4", "F5"), s("chord"), n("note_4", "D5", "upper2"), s("barline"))
+        val two = listOf(s("clef_G2"), n("note_4", "E5"), s("chord"), n("note_4", "C5", "upper2"), n("note_4", "F5"), s("chord"), n("note_4", "D5", "upper2"),
+            n("note_4", "G5"), s("chord"), n("note_4", "E5", "upper2"), n("note_4", "F5"), s("chord"), n("note_4", "D5", "upper2"), s("barline"))
         val sys = listOf(read(0, 'G', 74, two), read(1, 'G', 62, low), read(2, 'G', 66, melody, oct8 = true), read(3, 'F', 48, bass))
         val parts = Parts.describe(sys)
         assertEquals(listOf("Сопрано 1", "Сопрано 2", "Альт", "Тенор", "Бас"), parts.map { it.name })
@@ -49,5 +50,13 @@ class PartsTest {
         val s2 = parts.first { it.name == "Сопрано 2" }; val a = parts.first { it.name == "Альт" }
         assertEquals(0, Parts.staffFor(s2, four)!!.first.indexInSystem)   // сопрано одной строкой — её поют обе партии
         assertEquals(1, Parts.staffFor(a, four)!!.first.indexInSystem)
+    }
+
+    @Test fun userFixesVoice() {
+        val sys = listOf(read(0, 'G', 70, melody), read(1, 'G', 62, low), read(2, 'G', 66, melody, oct8 = true), read(3, 'F', 48, bass))
+        val parts = Parts.describe(sys)
+        val fixed = Parts.withKind(parts, 1, ChoirVoice.TENOR)
+        assertEquals(listOf("Сопрано", "Тенор 1", "Тенор 2", "Бас"), fixed.map { it.name })
+        assertTrue(fixed[1].lowerOctave)
     }
 }

@@ -82,6 +82,9 @@ class PrepareViewModel(private val c: AppContainer, val path: String, val hash: 
         finally { scanning.value = false }
     }
 
+    /** Пользователь поправил голос найденной партии. null — фортепиано. */
+    fun setPartKind(i: Int, kind: ru.partitrainer.omr.homr.ChoirVoice?) { parts.value = ru.partitrainer.omr.homr.Parts.withKind(parts.value, i, kind) }
+
     fun togglePart(i: Int) { pickedParts.value = if (i in pickedParts.value) pickedParts.value - i else pickedParts.value + i }
 
     init {
@@ -215,10 +218,22 @@ fun PrepareScreen(path: String, hash: String, name: String, isPdf: Boolean, onBa
                         for ((i, p) in parts.withIndex()) {
                             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(i in picked, role = Role.Checkbox, onValueChange = { vm.togglePart(i) }), verticalAlignment = Alignment.CenterVertically) {
                                 Checkbox(i in picked, onCheckedChange = null); Spacer(Modifier.width(12.dp))
-                                Column {
+                                Column(Modifier.weight(1f)) {
                                     Text(p.name)
                                     val where = stringResource(R.string.parts_where, p.staffIndex + 1) + when (p.stemVoice) { 1 -> stringResource(R.string.parts_upper); 2 -> stringResource(R.string.parts_lower); else -> "" }
                                     Text(where, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                // поправить голос, если определился неверно
+                                var menu by remember { mutableStateOf(false) }
+                                Box {
+                                    TextButton(onClick = { menu = true }, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.parts_change)) }
+                                    DropdownMenu(menu, { menu = false }) {
+                                        for ((k, label) in listOf(
+                                            ru.partitrainer.omr.homr.ChoirVoice.SOPRANO to R.string.staff_soprano, ru.partitrainer.omr.homr.ChoirVoice.ALTO to R.string.staff_alto,
+                                            ru.partitrainer.omr.homr.ChoirVoice.TENOR to R.string.staff_tenor, ru.partitrainer.omr.homr.ChoirVoice.BASS to R.string.staff_bass,
+                                            null to R.string.parts_piano,
+                                        )) DropdownMenuItem(text = { Text(stringResource(label)) }, onClick = { menu = false; vm.setPartKind(i, k) })
+                                    }
                                 }
                             }
                         }
