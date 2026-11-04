@@ -184,6 +184,49 @@ object ImageOps {
         return out
     }
 
+    /**
+     * Резкость краёв страницы: среди заметных перепадов яркости по вертикали (через строку, ≥ 16) — 90-й процентиль.
+     * Чистый PDF ≈ 255, скан 300 dpi ≈ 185, 200 dpi ≈ 130, размытый скан / 150 dpi ≈ 75–130. Считается по краям штрихов,
+     * поэтому почти пустая страница не выглядит размытой.
+     */
+    fun edgeSharpness(img: GrayImage): Int {
+        val hist = IntArray(256)
+        var n = 0
+        for (y in 1 until img.height - 1 step 2) {
+            val up = (y - 1) * img.width; val dn = (y + 1) * img.width
+            for (x in 0 until img.width) {
+                val g = abs((img.data[dn + x].toInt() and 0xFF) - (img.data[up + x].toInt() and 0xFF))
+                if (g >= 16) { hist[g]++; n++ }
+            }
+        }
+        if (n == 0) return 255
+        var acc = 0; val target = (n * 0.9).toInt()
+        for (v in 0..255) { acc += hist[v]; if (acc > target) return v }
+        return 255
+    }
+
+    /** Нерезкая маска: src + amount·(src − размытие Гаусса с [sigma]). Возвращает размытым сканам чёткие линейки и штрихи. */
+    fun unsharp(src: GrayImage, sigma: Double = 2.0, amount: Double = 2.0): GrayImage {
+        val r = Math.ceil(3 * sigma).toInt()
+        val k = DoubleArray(2 * r + 1) { val d = (it - r).toDouble(); Math.exp(-d * d / (2 * sigma * sigma)) }
+        val ks = k.sum(); for (i in k.indices) k[i] /= ks
+        val w = src.width; val h = src.height
+        val tmp = FloatArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            var acc = 0.0
+            for (i in -r..r) acc += k[i + r] * (src.data[y * w + (x + i).coerceIn(0, w - 1)].toInt() and 0xFF)
+            tmp[y * w + x] = acc.toFloat()
+        }
+        val out = GrayImage(w, h)
+        for (y in 0 until h) for (x in 0 until w) {
+            var acc = 0.0
+            for (i in -r..r) acc += k[i + r] * tmp[(y + i).coerceIn(0, h - 1) * w + x]
+            val v = src.data[y * w + x].toInt() and 0xFF
+            out.data[y * w + x] = (v + amount * (v - acc)).roundToInt().coerceIn(0, 255).toByte()
+        }
+        return out
+    }
+
     /** Поворот вокруг центра на [radians] (положительный — наклон линий «вниз вправо» исправляется), белая заливка. */
     fun rotate(src: GrayImage, radians: Double): GrayImage {
         val out = GrayImage(src.width, src.height)

@@ -91,7 +91,12 @@ class HomrPipeline(
         onProgress: (done: Int, total: Int, message: String) -> Unit, isCancelled: () -> Boolean,
         profile: OmrProfile = OmrProfile(),
     ): Located {
-        val resized = profile.stage("resize") { ImageOps.resizeToHomrWidth(gray) }
+        var resized = profile.stage("resize") { ImageOps.resizeToHomrWidth(gray) }
+        // Размытый скан (150 dpi, расфокус): линейки бледнеют и рвутся, символы сливаются — возвращаем резкость.
+        // Чистые PDF и сканы от 300 dpi не трогаются (их резкость выше порога).
+        val sharpness = profile.stage("sharpen") { ImageOps.edgeSharpness(resized) }
+        profile.info["edgeSharpness"] = sharpness.toString()
+        if (sharpness < BLURRY_PAGE) resized = profile.stage("sharpen") { ImageOps.unsharp(resized) }
         var page = profile.stage("clahe") { ImageOps.clahe(resized) }
         profile.info["page"] = "${gray.width}x${gray.height} -> ${page.width}x${page.height}"
         if (!accurate) {
@@ -276,6 +281,12 @@ class HomrPipeline(
          * на 159 строках (5 изданий): у строк без «8» ≤ 0,011, у теноров с «8» ≥ 0,027 (бледная «8» в сканах).
          */
         const val OCTAVE_MARK_THRESHOLD = 0.02
+
+        /**
+         * Страница считается размытой (и ей возвращается резкость), если резкость краёв ниже этого ([ImageOps.edgeSharpness]):
+         * размытые сканы и сканы 150 dpi — 75–130, 200 dpi — ≈130, 300 dpi — ≈185, PDF — 255.
+         */
+        const val BLURRY_PAGE = 140
 
         /**
          * Число потоков чтения нотоносцев. По замерам параллельное чтение не ускоряет: энкодер уже занимает все ядра,
