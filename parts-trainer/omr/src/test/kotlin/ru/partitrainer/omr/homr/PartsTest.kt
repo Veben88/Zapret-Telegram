@@ -38,6 +38,17 @@ class PartsTest {
         assertEquals(listOf(1, 2), parts.take(2).map { it.stemVoice })
     }
 
+    @Test fun earlyMusicWithOctaveTrebleForLowerVoices() {
+        // Superius, Altus, Tenor, Bassus: у трёх нижних «соль с 8», басового ключа нет
+        val sys = listOf(read(0, 'G', 70, melody), read(1, 'G', 77, melody, oct8 = true), read(2, 'G', 76, melody, oct8 = true), read(3, 'G', 70, low, oct8 = true))
+        val parts = Parts.describe(sys)
+        assertEquals(listOf("Сопрано", "Альт", "Тенор", "Бас"), parts.map { it.name })
+        assertEquals(listOf(false, true, true, true), parts.map { it.lowerOctave })
+        val (_, shift) = Parts.tokensFor(parts[1], listOf(sys))
+        assertEquals(-12, shift)                                     // альт с «8» звучит октавой ниже
+        assertTrue(Parts.withKind(parts, 3, ChoirVoice.TENOR)[3].lowerOctave)
+    }
+
     @Test fun encodeDecodeRoundTrip() {
         val p = PartPick(2, 5, 'G', false, 2, 1, "Альт 2", ChoirVoice.ALTO, false, true, 1)
         assertEquals(p, PartPick.decode(p.encode()))

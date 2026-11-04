@@ -20,7 +20,8 @@ def align(a, b):
         else: ops.append((i, 'лишнее', None, b[j-1])); j -= 1
     return ops[::-1]
 xml, tok, st, pid, li = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5])
-g = gt_lines(xml)[pid][li]; o = our_lines(tok, st+1)[st][li]
+shift = int(sys.argv[6]) if len(sys.argv) > 6 else 0          # сдвиг в полутонах (ключ «соль с 8» — -12)
+g = gt_lines(xml)[pid][li]; o = our_lines(tok, st+1, {st: shift})[st][li]
 for i, op, a, b in align(g, o):
     f = lambda x: '-' if x is None else f'{nm(x[0])}/{x[1]}'
     print(f'нота {i:3d}: {op:9s} эталон {f(a):10s} у нас {f(b)}')

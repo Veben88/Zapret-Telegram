@@ -64,8 +64,8 @@ def our_lines(tokfile, nstaff, transpose=None):
     out = {}
     for st in range(nstaff):
         notes = []; t = F(0)
-        for _, toks in sorted(staffs.get(st, [])):
-            groups = []; in_chord = False
+        for si, (_, toks) in enumerate(sorted(staffs.get(st, []))):
+            groups = []; in_chord = False; first = si > 0
             for tk in toks:
                 r, p, l, pos, sl = (tk.split('|') + ['', '', '', '', ''])[:5]
                 if r == 'chord': in_chord = True; continue
@@ -81,7 +81,9 @@ def our_lines(tokfile, nstaff, transpose=None):
                         if mm is None: continue
                         mm += (transpose or {}).get(st, 0)
                         # лига (как в приложении): slurStop на этой ноте и slurStart на прошлой той же высоты, которая кончается здесь
-                        prev = next((k for k in range(len(notes) - 1, -1, -1) if notes[k][1] == mm and notes[k][0] + notes[k][2] == t and notes[k][3]), None) if 'slurStop' in x[4] else None
+                        # на переносе строки хватает конца дуги на первой ноте (начало у края прошлой строки модель иногда не видит)
+                        prev = next((k for k in range(len(notes) - 1, -1, -1) if notes[k][1] == mm and notes[k][0] + notes[k][2] == t and (notes[k][3] or first)), None) if 'slurStop' in x[4] else None
+                        first = False
                         if prev is not None: notes[prev] = (notes[prev][0], mm, notes[prev][2] + d, 'slurStart' in x[4])
                         else: notes.append((t, mm, d, 'slurStart' in x[4]))
                 t += min(d for _, d in ev)
@@ -100,8 +102,11 @@ def ed(a, b):
 if __name__ == '__main__':
     xml, tok, mapping = sys.argv[1], sys.argv[2], sys.argv[3]   # mapping like "0:P1,1:P2,2:P3"
     gt = gt_lines(xml)
-    pairs = [(int(a), b) for a, b in (x.split(':') for x in mapping.split(','))]
-    ours = our_lines(tok, max(a for a, _ in pairs) + 1)
+    # "строка:партия[:сдвиг]", сдвиг в полутонах (ключ «соль с 8»: в MusicXML звучащая высота, -12)
+    spec = [x.split(':') for x in mapping.split(',')]
+    pairs = [(int(x[0]), x[1]) for x in spec]
+    shift = {int(x[0]): int(x[2]) for x in spec if len(x) > 2}
+    ours = our_lines(tok, max(a for a, _ in pairs) + 1, shift)
     tot = [0, 0, 0]
     for st, pid in pairs:
         for li, name in ((0, 'верх'), (1, 'низ')):

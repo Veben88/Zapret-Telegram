@@ -915,7 +915,7 @@ class HomrReferenceTest {
         fun q(l: List<Double>) = l.sorted().let { "n=${it.size} min=%.3f p10=%.3f med=%.3f p90=%.3f max=%.3f".format(it.first(), it[it.size / 10], it[it.size / 2], it[it.size * 9 / 10], it.last()) }
         println("OCT new tenor ${q(tenNew)}"); println("OCT new other ${q(othNew)}")
         println("OCT old tenor ${q(tenOld)}"); println("OCT old other ${q(othOld)}")
-        for (t in listOf(0.02, 0.03, 0.04, 0.05, 0.06)) {
+        for (t in listOf(0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05)) {
             println("OCT thr $t: new miss ${tenNew.count { it <= t }} false ${othNew.count { it > t }}; old miss ${tenOld.count { it <= t }} false ${othOld.count { it > t }}")
         }
     }
@@ -938,5 +938,27 @@ class HomrReferenceTest {
         }
         File(out).writeText(sb.toString())
         println("DUMP written ${sb.lines().size} lines")
+    }
+
+    /** Нотоносцы и системы страницы: HOMR_STAVES=dir:p1,p2 (+ картинка *_staves.png). */
+    @Test fun stavesDump() {
+        val spec = System.getenv("HOMR_STAVES")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val (dir, names) = spec!!.split(':')
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder"))).use { pl ->
+            for (name in names.split(',')) {
+                val loc = pl.locate(loadGray(File(dir, "$name.png")), false, { _, _, _ -> }, { false })
+                println("STAVES $name ${loc.page.width}x${loc.page.height} systems=${loc.systems.map { it.size }}")
+                for (s in loc.staves) println("  x=${s.minX}..${s.maxX} y=${s.minY}..${s.maxY} u=${"%.1f".format(s.unit)}")
+                for (sys in loc.systems) {
+                    val left = sys.map { it.minX }.sorted().let { it[it.size / 2] }.toDouble()
+                    println("  oct: " + sys.mapIndexed { i, st -> "%.3f".format(StaffDetector.octaveMarkScore(loc.page, st, sys.getOrNull(i + 1)?.minY, left)) })
+                }
+                val img = java.awt.image.BufferedImage(loc.page.width, loc.page.height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+                for (y in 0 until loc.page.height) for (x in 0 until loc.page.width) { val v = loc.page[x, y]; img.setRGB(x, y, (v shl 16) or (v shl 8) or v) }
+                javax.imageio.ImageIO.write(img, "png", File(dir, "${name}_page.png"))
+            }
+        }
     }
 }

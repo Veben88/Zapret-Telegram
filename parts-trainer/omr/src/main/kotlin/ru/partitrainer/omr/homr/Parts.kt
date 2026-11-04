@@ -81,6 +81,17 @@ object Parts {
         fun oct(l: Lane) = system[l.staff].octave8 && l.staff > lastPlainG
         // скрипичный с «8»
         lanes.filter { clef(it) != 'F' && oct(it) }.forEach { it.kind = ChoirVoice.TENOR }
+        // Старинная музыка в современных изданиях: «соль с 8» бывает у альта, тенора и баса сразу (Superius, Altus,
+        // Tenor, Bassus), басового ключа нет. Тогда голоса — по порядку сверху вниз; все строки с «8» звучат октавой ниже.
+        val octLanes = lanes.filter { clef(it) != 'F' && oct(it) }
+        if (lanes.none { clef(it) == 'F' } && octLanes.size >= 2 && octLanes.none { it.voice != 0 }) {
+            val order = listOf(ChoirVoice.SOPRANO, ChoirVoice.ALTO, ChoirVoice.TENOR, ChoirVoice.BASS)
+            when {
+                lanes.size == 4 -> lanes.forEachIndexed { i, l -> l.kind = order[i] }
+                octLanes.size == 3 -> octLanes.forEachIndexed { i, l -> l.kind = order[i + 1] }
+            }
+            octLanes.forEach { it.lowerOctave = true }
+        }
         // скрипичный без «8» прямо над басовой строкой при трёх и более скрипичных строках — тенор без распознанной «8»
         // (тенор пишется на октаву выше звучания, поэтому его ноты на письме выше, чем у строки над ним;
         //  у третьего альта — наоборот, так «Сопрано 1, 2, Альт 1, 2, 3, Бас» не превращается в тенор)
@@ -155,7 +166,7 @@ object Parts {
         val changed = parts.mapIndexed { i, p ->
             if (i != index) p
             else if (kind == null) p.copy(kind = null, piano = true, name = "Фортепиано", lowerOctave = false)
-            else p.copy(kind = kind, piano = false, name = title(kind), lowerOctave = kind == ChoirVoice.TENOR && p.clef != 'F')
+            else p.copy(kind = kind, piano = false, name = title(kind), lowerOctave = p.clef != 'F' && (kind == ChoirVoice.TENOR || p.octave8 && p.lowerOctave))
         }
         // снять старые номера и пронумеровать заново (фортепиано не нумеруем)
         val base = changed.map { if (it.piano) it else it.copy(name = it.name.replace(Regex(" \\d+$"), "")) }
@@ -198,7 +209,7 @@ object Parts {
                 val lines = st.lyricLines.let { l -> (l.getOrNull(line) ?: l.getOrNull(0))?.let { listOf(it) }.orEmpty() }
                 val syls = st.lyricSyls.let { l -> (l.getOrNull(line) ?: l.getOrNull(0))?.let { listOf(it) }.orEmpty() }
                 out += ChoirAssigner.StaffText(toks, lines, st.columns, syls)
-                if (pick.kind == ChoirVoice.TENOR && (st.octave8 || pick.lowerOctave) && st.clef != 'F') shift = -12
+                if (st.clef != 'F' && (pick.lowerOctave || pick.kind == ChoirVoice.TENOR && st.octave8)) shift = -12
             } else {
                 val ref = sys.firstOrNull { it.tokens.isNotEmpty() } ?: continue
                 val n = TokenParser.parse(listOf(ref.tokens)).measures.size

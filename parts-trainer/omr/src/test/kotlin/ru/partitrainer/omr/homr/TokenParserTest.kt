@@ -45,6 +45,16 @@ class TokenParserTest {
         assertEquals(4.0, p.measures[2].total, 1e-9) // пауза на целый такт
     }
 
+    @Test fun tieOverLineBreakWithOnlyItsEnd() {
+        // начало дуги у правого края строки не прочитано, конец на первой ноте следующей строки — это лига;
+        // внутри строки одного конца мало
+        val line1 = listOf(s("timeSignature/4"), note("note_2", "C5"), note("note_2", "D5"), s("barline"))
+        val line2 = listOf(note("note_2", "D5", sl = "slurStop"), note("note_2", "D5", sl = "slurStop"), s("barline"))
+        val notes = ClaudeOmr.assemble(TokenParser.parse(listOf(line1, line2))).score.voices.single().notes
+        assertEquals(listOf(72, 74, 74), notes.map { it.midi })
+        assertEquals(4.0, notes[1].beats, 1e-9)
+    }
+
     @Test fun chordKeepsTopNoteAndTranspose() {
         val t = listOf(s("timeSignature/4"), note("note_1", "C4"), s("chord"), note("note_1", "E4"), s("barline"))
         assertEquals(64, ClaudeOmr.assemble(TokenParser.parse(listOf(t))).score.voices.single().notes.single().midi)

@@ -80,6 +80,7 @@ object TokenParser {
         for ((staffIdx, symbols) in staffs.withIndex()) {
             val sylQueue = syllables.getOrNull(staffIdx).orEmpty()
             var sylPos = 0
+            var firstNote = staffIdx > 0
             // группы аккордов: символ после «chord» относится к предыдущей группе
             val groups = ArrayList<MutableList<EncodedSymbol>>()
             var inChord = false
@@ -123,7 +124,11 @@ object TokenParser {
                         val ev = Ev(((best.first + transpose).coerceIn(0, 127)), b, false, best.second.slur, x = best.second.x, y = best.second.y, staff = staffIdx)
                         // лига: slurStart на предыдущей ноте и slurStop на этой с той же высотой
                         val p = prevEvent
-                        val continuation = p != null && p.midi == ev.midi && p.slur.contains("slurStart") && ev.slur.contains("slurStop")
+                        // На переносе строки начало дуги стоит у самого правого края прошлой строки, и модель его иногда
+                        // не видит: там хватает конца дуги на первой ноте новой строки.
+                        val continuation = p != null && p.midi == ev.midi && ev.slur.contains("slurStop") &&
+                            (p.slur.contains("slurStart") || (firstNote && p.staff == staffIdx - 1))
+                        firstNote = false
                         if (continuation) p!!.tie = true else ev.syl = sylQueue.getOrNull(sylPos++)
                         cur.events += ev; prevEvent = ev
                     }

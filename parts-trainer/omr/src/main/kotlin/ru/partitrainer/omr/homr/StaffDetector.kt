@@ -200,7 +200,7 @@ object StaffDetector {
                 if (slopes.max() - slopes.min() > 30.0) continue   // c1 — пикселей на 1000 пикселей ширины
                 val x0 = chain.maxOf { lines[it].minX }; val x1 = chain.minOf { lines[it].maxX }
                 if (x1 - x0 <= MIN_RUN) continue
-                val gx0 = chain.minOf { lines[it].minX }; val gx1 = chain.maxOf { lines[it].maxX }
+                val gx0 = spanStart(chain.map { lines[it].minX }); val gx1 = spanEnd(chain.map { lines[it].maxX })
                 val xm = (gx0 + gx1) / 2.0
                 staves += DetectedStaff(gx0, gx1, lines[i].y(xm).toInt(), lines[m].y(xm).toInt(), d, lines[i].poly, lines[m].poly)
                 chain.forEach { used[it] = true }
@@ -210,6 +210,13 @@ object StaffDetector {
         staves += inferFourLineStaves(lines, used, staves)
         return staves.sortedBy { (it.minY + it.maxY) / 2 }
     }
+
+    /**
+     * Начало/конец нотоносца — по средней линейке: линейки могут «удлиниться» за счёт слившейся с ними подписи партии
+     * слева («Superius», «Soprano 2»), и тогда скобка системы не находится.
+     */
+    private fun spanStart(xs: List<Int>): Int = xs.sorted()[xs.size / 2]
+    private fun spanEnd(xs: List<Int>): Int = xs.sortedDescending()[xs.size / 2]
 
     /**
      * Запасной проход: сегментация иногда «теряет» одну линейку (её закрывает лига). Четыре равноотстоящие
@@ -259,7 +266,7 @@ object StaffDetector {
             val g = (0 until 3).map { ys[it + 1] - ys[it] }
             val d = g.average()
             if (d < 6 || d > 40 || g.max() - g.min() > 0.2 * d) continue
-            val gx0 = c.minOf { it.minX }; val gx1 = c.maxOf { it.maxX }
+            val gx0 = spanStart(c.map { it.minX }); val gx1 = spanEnd(c.map { it.maxX })
             val xm = (gx0 + gx1) / 2.0
             val firstP = c.first().poly; val lastP = c.last().poly
             // кандидат: пятая линия снизу или сверху
@@ -377,9 +384,12 @@ object StaffDetector {
             if (!dark[start] || label[start] != 0) continue
             var sp = 0; stack[sp++] = start; label[start] = next
             var minX = w; var maxX = -1; var minY = h; var maxY = -1
+            // в столбцах окна: сколько пикселей, сколько из них выше окна, нижний край
+            var size = 0; var above = 0; var lowIn = -1
             while (sp > 0) {
                 val q = stack[--sp]; val qx = q % w; val qy = q / w
                 if (qx < minX) minX = qx; if (qx > maxX) maxX = qx; if (qy < minY) minY = qy; if (qy > maxY) maxY = qy
+                if (ax0 + qx in x0 until x1) { size++; if (ay0 + qy < y0) above++; if (qy > lowIn) lowIn = qy }
                 for ((dx, dy) in OCT_NEIGH) {
                     val nx = qx + dx; val ny = qy + dy
                     if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
@@ -388,7 +398,14 @@ object StaffDetector {
                 }
             }
             val id = next++
-            if (ay0 + minY < staffBottom + 0.8 * u) continue          // начинается в нотоносце — ключ с «8», не слово
+            // Крупный ключ лишь краем заходит в окно сверху — хвостом (часть ключа) или отдельным «шариком» с концом
+            // хвоста (большей частью выше окна). Это не «8»: приклеенная «8» тянется через окно вниз, отдельная — лежит в окне.
+            val shallow = ay0 + lowIn < y0 + 0.5 * u
+            if (ay0 + minY < staffBottom + 0.8 * u) {
+                if (shallow) textLike += id
+                continue                                               // иначе — ключ с «8», не слово
+            }
+            if (above >= 0.5 * size && shallow) { textLike += id; continue }
             fun neighbourDark(fromX: Int, toX: Int): Boolean {
                 var c = 0; var t = 0
                 for (yy in minY..maxY) for (xx in max(0, fromX)..min(w - 1, toX)) { t++; if (dark[yy * w + xx] && label[yy * w + xx] != id) c++ }
