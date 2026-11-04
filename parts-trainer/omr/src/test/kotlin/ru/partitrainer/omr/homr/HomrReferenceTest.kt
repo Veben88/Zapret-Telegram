@@ -919,4 +919,24 @@ class HomrReferenceTest {
             println("OCT thr $t: new miss ${tenNew.count { it <= t }} false ${othNew.count { it > t }}; old miss ${tenOld.count { it <= t }} false ${othOld.count { it > t }}")
         }
     }
+
+    /** Выгрузка токенов для сверки с эталоном: HOMR_DUMP=dir:p1,p2:out.txt — строки «page sys staff<TAB>rhythm|pitch|lift|pos …». */
+    @Test fun dumpTokens() {
+        val spec = System.getenv("HOMR_DUMP")?.takeIf { it.isNotBlank() }
+        assumeTrue(models != null && spec != null)
+        val (dir, names, out) = spec!!.split(':')
+        fun f(pr: String) = models!!.listFiles()!!.first { it.name.startsWith(pr) && it.name.endsWith(".onnx") }
+        val sb = StringBuilder()
+        HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder")), threads = 4, staffWorkers = 4, decoderThreads = 1, encoderThreads = 1).use { pl ->
+            for ((pi, name) in names.split(',').withIndex()) {
+                val reads = pl.recognizeAll(loadGray(File(dir, "$name.png")))
+                for (sys in reads) for (r in sys) {
+                    sb.append("$pi ${r.system} ${r.indexInSystem} ${r.clef ?: '-'}${if (r.octave8) "8" else ""}\t")
+                    sb.append((if (System.getenv("HOMR_RAW") == "1") r.tokens else Repairs.fixDots(r.tokens)).joinToString(" ") { "${it.rhythm}|${it.pitch}|${it.lift}|${it.position}|${it.slur}" }).append('\n')
+                }
+            }
+        }
+        File(out).writeText(sb.toString())
+        println("DUMP written ${sb.lines().size} lines")
+    }
 }
