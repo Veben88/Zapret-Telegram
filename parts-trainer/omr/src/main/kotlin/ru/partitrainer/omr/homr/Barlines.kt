@@ -156,7 +156,7 @@ object LayoutBuilder {
     }
 
     /** Точка выровненной страницы → исходная страница (обратный поворот вокруг центра, как в ImageOps.rotate). */
-    private fun toSourcePoint(f: PageFrame, px: Double, py: Double): Pair<Double, Double> {
+    fun toSourcePoint(f: PageFrame, px: Double, py: Double): Pair<Double, Double> {
         val cx = (f.width - 1) / 2.0; val cy = (f.height - 1) / 2.0
         val cs = Math.cos(f.angle); val sn = Math.sin(f.angle)
         val dx = px - cx; val dy = py - cy

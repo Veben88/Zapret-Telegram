@@ -49,6 +49,13 @@ class PartsTest {
         assertTrue(Parts.withKind(parts, 3, ChoirVoice.TENOR)[3].lowerOctave)
     }
 
+    @Test fun pickStringFromPendingJobStillDecodes() {
+        // строка в формате, которым выбор партии передаётся фоновой задаче распознавания (может ждать в очереди при обновлении)
+        val p = PartPick.decode("3|4|G|1|2|0|BASS|0|1|0|Бас")!!
+        assertEquals(PartPick(3, 4, 'G', true, 2, 0, "Бас", ChoirVoice.BASS, false, true, 0), p)
+        assertEquals("Фортепиано, левая рука", PartPick.decode("5|6|F|0|1|0|-|1|0|0|Фортепиано, левая рука")!!.name)
+    }
+
     @Test fun encodeDecodeRoundTrip() {
         val p = PartPick(2, 5, 'G', false, 2, 1, "Альт 2", ChoirVoice.ALTO, false, true, 1)
         assertEquals(p, PartPick.decode(p.encode()))

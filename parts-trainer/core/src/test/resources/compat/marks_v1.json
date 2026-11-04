@@ -1,0 +1,1 @@
+[{"startBeat":0.0,"lengthBeats":3.0,"repeatStart":true,"repeatEnd":false,"repeatTimes":2,"volta":[],"segno":false,"coda":false,"toCoda":false,"fine":false,"jump":null},{"startBeat":3.0,"lengthBeats":3.0,"repeatEnd":true,"volta":[1]},{"startBeat":6.0,"lengthBeats":3.0,"volta":[2],"jump":"DC_AL_FINE"}]

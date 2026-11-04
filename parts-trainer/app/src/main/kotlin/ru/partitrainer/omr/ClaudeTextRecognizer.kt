@@ -85,7 +85,9 @@ class ClaudeTextRecognizer(private val apiKeyProvider: () -> String?) : TextReco
         }.toString()
         var backoff = 1500L
         repeat(3) { attempt ->
-            val (code, resp) = try { post(key, body) } catch (e: IOException) { lastError = "нет связи с сервером"; return null }
+            // Нет связи — больше не пробуем в этом распознавании: иначе без сети каждая строка ждала бы тайм-аут (до 20 с),
+            // а ноты распознаются и без слов.
+            val (code, resp) = try { post(key, body) } catch (e: IOException) { fatal = true; lastError = "нет связи с сервером"; return null }
             when {
                 code in 200..299 -> { recognized++; return extract(resp) }
                 code == 401 || code == 403 -> { fatal = true; lastError = "ключ API отклонён (код $code)"; return null }
