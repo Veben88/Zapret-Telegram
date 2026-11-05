@@ -91,27 +91,73 @@ class HomrPipeline(
         onProgress: (done: Int, total: Int, message: String) -> Unit, isCancelled: () -> Boolean,
         profile: OmrProfile = OmrProfile(),
     ): Located {
-        var resized = profile.stage("resize") { ImageOps.resizeToHomrWidth(gray) }
+        val resized = profile.stage("resize") { ImageOps.resizeToHomrWidth(gray) }
         // Размытый скан (150 dpi, расфокус): линейки бледнеют и рвутся, символы сливаются — возвращаем резкость.
-        // Чистые PDF и сканы от 300 dpi не трогаются (их резкость выше порога).
+        // Чистые PDF и чёткие сканы не трогаются (их резкость выше порога).
         val sharpness = profile.stage("sharpen") { ImageOps.edgeSharpness(resized) }
         profile.info["edgeSharpness"] = sharpness.toString()
-        if (sharpness < BLURRY_PAGE) resized = profile.stage("sharpen") { ImageOps.unsharp(resized) }
-        var page = profile.stage("clahe") { ImageOps.clahe(resized) }
+        val sharpened = if (sharpness < BLURRY_PAGE) profile.stage("sharpen") { ImageOps.unsharp(resized) } else null
+        var page = profile.stage("clahe") { ImageOps.clahe(sharpened ?: resized) }
         profile.info["page"] = "${gray.width}x${gray.height} -> ${page.width}x${page.height}"
         if (!accurate) {
-            val located = profile.stage("classic") {
-                val dark = ClassicStaffMask.dark(page)
-                val slope = ClassicStaffMask.estimateSlope(dark, page.width, page.height)
+            fun classic(pg: GrayImage) = profile.stage("classic") {
+                val dark = ClassicStaffMask.dark(pg)
+                val slope = ClassicStaffMask.estimateSlope(dark, pg.width, pg.height)
                 val angle = if (Math.abs(slope) > 0.005) Math.atan(slope) else 0.0
-                val p = if (angle != 0.0) ImageOps.rotate(page, angle) else page
-                val d = if (p === page) dark else ClassicStaffMask.dark(p)
+                val p = if (angle != 0.0) ImageOps.rotate(pg, angle) else pg
+                val d = if (p === pg) dark else ClassicStaffMask.dark(p)
                 val staves = StaffDetector.detect(ClassicStaffMask.mask(p, d))
                 if (staves.isEmpty()) null else Located(p, staves, StaffDetector.systems(staves, p), angle, profile)
             }
-            if (located != null) { usedClassic = true; return located }
+            var located = classic(page)
+            if (sharpened != null) {
+                // Резкость помогает не всегда (очень размытая страница без потери разрешения: одна из бледных линеек
+                // может пропасть) — линейки ищутся и на странице без неё, берётся вариант с бо́льшим числом нотоносцев.
+                val plain = classic(profile.stage("clahe") { ImageOps.clahe(resized) })
+                if (plain != null && plain.staves.size > (located?.staves?.size ?: 0)) { located = plain; profile.info["sharpened"] = "no" }
+                else profile.info["sharpened"] = "yes"
+            }
+            if (located != null) {
+                // Внутри системы пропуск между строками вдвое больше обычного — строка не найдена (бледные линейки скана).
+                // Тогда пробуем нейросеть и берём её ответ, только если он содержит все уже найденные строки и добавляет новые.
+                if (files.segnet.isFile && hasMissingStaff(located)) {
+                    profile.info["staffGap"] = "yes"
+                    val seg = segnetLocate(page, onProgress, isCancelled, profile)
+                    if (seg.staves.size > located.staves.size && located.staves.all { c -> seg.staves.any { sameStaff(it, seg.angle, c, located.angle, page) } }) {
+                        profile.info["segnetFilledGap"] = "${located.staves.size} -> ${seg.staves.size}"
+                        usedClassic = false
+                        return seg
+                    }
+                }
+                usedClassic = true; return located
+            }
         }
         usedClassic = false
+        return segnetLocate(page, onProgress, isCancelled, profile)
+    }
+
+    /** Есть ли в системах страницы пропуск между соседними строками, больший 1,75 обычного (медианы по странице). */
+    private fun hasMissingStaff(loc: Located): Boolean {
+        val gaps = loc.systems.flatMap { sys -> sys.zipWithNext { a, b -> (b.minY - a.minY).toDouble() } }
+        if (gaps.size < 3) return false
+        val med = gaps.sorted()[gaps.size / 2]
+        return gaps.any { it > 1.75 * med }
+    }
+
+    /** Тот же нотоносец в двух разметках (страницы могли быть выровнены по-разному): середины ближе 1 интервала. */
+    private fun sameStaff(a: DetectedStaff, angleA: Double, b: DetectedStaff, angleB: Double, page: GrayImage): Boolean {
+        fun mid(st: DetectedStaff, ang: Double): Double {
+            val cx = (page.width - 1) / 2.0; val cy = (page.height - 1) / 2.0
+            val x = (st.minX + st.maxX) / 2.0; val y = (st.minY + st.maxY) / 2.0
+            return cy + (x - cx) * Math.sin(ang) + (y - cy) * Math.cos(ang)      // в координатах исходной (невыровненной) страницы
+        }
+        return Math.abs(mid(a, angleA) - mid(b, angleB)) < a.unit
+    }
+
+    private fun segnetLocate(
+        startPage: GrayImage, onProgress: (done: Int, total: Int, message: String) -> Unit, isCancelled: () -> Boolean, profile: OmrProfile,
+    ): Located {
+        var page = startPage
         if (!files.segnet.isFile) throw SegnetMissingException()
         onProgress(0, 1, "Сегментация нот")
         val segnet = Segnet(env, segSession)

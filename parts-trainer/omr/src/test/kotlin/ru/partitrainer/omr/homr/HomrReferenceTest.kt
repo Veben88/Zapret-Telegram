@@ -949,7 +949,7 @@ class HomrReferenceTest {
         HomrPipeline(HomrModelFiles(f("segnet"), f("encoder"), f("decoder"))).use { pl ->
             for (name in names.split(',')) {
                 val loc = pl.locate(loadGray(File(dir, "$name.png")), false, { _, _, _ -> }, { false })
-                println("STAVES $name ${loc.page.width}x${loc.page.height} systems=${loc.systems.map { it.size }}")
+                println("STAVES $name ${loc.page.width}x${loc.page.height} systems=${loc.systems.map { it.size }} info=${loc.profile.info}")
                 for (s in loc.staves) println("  x=${s.minX}..${s.maxX} y=${s.minY}..${s.maxY} u=${"%.1f".format(s.unit)}")
                 for (sys in loc.systems) {
                     val left = sys.map { it.minX }.sorted().let { it[it.size / 2] }.toDouble()
