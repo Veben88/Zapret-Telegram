@@ -2,6 +2,7 @@ package ru.partitrainer
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.partitrainer.data.EngineId
 import ru.partitrainer.omr.OmrJob
@@ -27,6 +28,9 @@ class AppUnitTest {
         assertNotEquals(base.cacheKey(), base.copy(engine = EngineId.ON_DEVICE).cacheKey())
         assertNotEquals(base.cacheKey(), base.copy(twoStaffChoir = true).cacheKey())
         assertNotEquals(base.cacheKey(), base.copy(accurate = true).cacheKey())
+        // версия движка входит в ключ: после улучшения распознавания старый результат не подставляется
+        assertTrue(base.cacheKey().contains("|v=${ru.partitrainer.core.omr.ClaudeOmr.PROMPT_VERSION}|"))
+        assertTrue(base.copy(engine = EngineId.ON_DEVICE).cacheKey().contains("|v=${ru.partitrainer.omr.homr.HomrPipeline.ALGORITHM_VERSION}|"))
     }
 
     @Test fun allStaffExpandsToThreeLines() {

@@ -53,6 +53,8 @@ class OmrFormatException(message: String) : Exception(message)
 
 object ClaudeOmr {
     const val MODEL = "claude-sonnet-5-5"
+    /** Версия запроса к Claude: меняется вместе с подсказкой/моделью — тогда кэш распознавания не подставит старый ответ. */
+    const val PROMPT_VERSION = "$MODEL/2026-11"
     const val ANTHROPIC_VERSION = "2023-06-01"
 
     val SYSTEM_PROMPT = """

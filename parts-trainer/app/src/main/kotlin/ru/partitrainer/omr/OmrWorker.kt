@@ -38,7 +38,13 @@ data class OmrJob(
     /** Партии, отмеченные после предварительного просмотра (PartPick.encode); пусто — по [staff]. */
     val parts: List<String> = emptyList(),
 ) {
-    fun cacheKey() = "$hash|${engine.name}|${pages.zip(rotations).joinToString(",") { "${it.first}r${it.second}" }}|${staff.key}${if (twoStaffChoir) "|2s" else ""}${if (accurate) "|acc" else ""}${if (lyrics) "|lyr" else ""}${if (parts.isNotEmpty()) "|parts:" + parts.joinToString(";").hashCode() else ""}"
+    /** Версия движка: после улучшения распознавания тот же файл распознаётся заново, а не берётся из кэша. */
+    private fun engineVersion() = when (engine) {
+        EngineId.ON_DEVICE -> ru.partitrainer.omr.homr.HomrPipeline.ALGORITHM_VERSION
+        EngineId.CLAUDE_VISION -> ClaudeOmr.PROMPT_VERSION
+    }
+
+    fun cacheKey() = "$hash|${engine.name}|v=${engineVersion()}|${pages.zip(rotations).joinToString(",") { "${it.first}r${it.second}" }}|${staff.key}${if (twoStaffChoir) "|2s" else ""}${if (accurate) "|acc" else ""}${if (lyrics) "|lyr" else ""}${if (parts.isNotEmpty()) "|parts:" + parts.joinToString(";").hashCode() else ""}"
 
     fun toData(): Data = workDataOf(
         "path" to filePath, "hash" to hash, "pdf" to isPdf, "title" to title,

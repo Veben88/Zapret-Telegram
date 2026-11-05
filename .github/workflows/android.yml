@@ -32,6 +32,8 @@ jobs:
         run: ./gradlew :app:lintDebug --stacktrace
       - name: Отладочный APK
         run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Схема базы (временно — чтобы сохранить её в репозитории)
+        run: find app/schemas -name '*.json' -print -exec cat {} \; || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
