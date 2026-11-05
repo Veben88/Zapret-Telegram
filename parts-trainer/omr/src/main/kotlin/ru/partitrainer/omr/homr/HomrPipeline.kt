@@ -193,7 +193,10 @@ class HomrPipeline(
         lastS2s = s2s
         val canvases = prof.stage("canvas") { chosen.map { st -> staffCanvas(page, st, staves) } }
         val result = transformer(prof, s2s) { predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, chosen.size, "Чтение нотоносца $done из ${chosen.size}") } }
-        prof.stage("postprocess") { result.forEachIndexed { i, t -> mapToPage(t, chosen[i], staves) } }
+        prof.stage("postprocess") {
+            result.forEachIndexed { i, t -> mapToPage(t, chosen[i], staves) }
+            snapNotes(page, result.mapIndexed { i, t -> t to chosen[i].unit })
+        }
         val read = text?.let { rec ->
             onProgress(chosen.size, chosen.size, "Распознавание текста")
             prof.stage("lyrics") { chosen.map { st -> if (isCancelled()) throw InterruptedException("Отменено"); Lyrics.read(rec, page, st, nextStaffOf(st, staves)) } }
@@ -234,7 +237,10 @@ class HomrPipeline(
         val allTokens = transformer(prof, s2s) {
             predictAll(s2s, canvases, isCancelled) { done -> onProgress(done, total, "Чтение нотоносца $done из $total") }
         }
-        prof.stage("postprocess") { allTokens.forEachIndexed { i, t -> mapToPage(t, jobs[i].third, staves) } }
+        prof.stage("postprocess") {
+            allTokens.forEachIndexed { i, t -> mapToPage(t, jobs[i].third, staves) }
+            snapNotes(page, allTokens.mapIndexed { i, t -> t to jobs[i].third.unit })
+        }
         val out = ArrayList<List<StaffRead>>()
         for ((si, sys) in systems.withIndex()) {
             val reads = ArrayList<StaffRead>()
@@ -284,6 +290,13 @@ class HomrPipeline(
             val oct = StaffDetector.octaveMarkScore(loc.page, st, sys.getOrNull(i + 1)?.minY, leftEdge)
             StaffRead(st, loc.systems.indexOf(sys), i, t, clef, oct > OCTAVE_MARK_THRESHOLD && clef != 'F', notes.getOrNull(notes.size / 2), oct)
         }
+    }
+
+    /** Точки нот — к головкам нот на странице ([NoteSnap]); только координаты для указателя, ноты не меняются. */
+    private fun snapNotes(page: GrayImage, staffs: List<Pair<List<EncodedSymbol>, Double>>) {
+        if (staffs.none { (t, _) -> t.any { it.rhythm.startsWith("note_") && !it.x.isNaN() } }) return
+        val integral = NoteSnap.Integral(page.width, page.height, NoteSnap.inkWithoutLines(page))
+        for ((t, unit) in staffs) NoteSnap.snapAll(page, integral, t, unit)
     }
 
     /** Чтение строк: время по часам («transformer») и сумма по потокам энкодера и декодера. */
